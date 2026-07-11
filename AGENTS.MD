@@ -29,7 +29,39 @@ Before making changes:
 3. Do not implement features assigned to later issues unless they are strictly required by the current task.
 4. Keep changes small and focused.
 
-The initial implementation order is represented by GitHub issues #1 through #10.
+The initial implementation order is represented by GitHub issues #1 through #11.
+
+## Local QA
+
+Before committing any code change, run the normal local QA suite:
+
+```bash
+./scripts/qa.sh
+```
+
+If Go is not available as `go` in `PATH`, set `GO` explicitly:
+
+```bash
+GO=/tmp/go/bin/go ./scripts/qa.sh
+```
+
+The script is intentionally small and runs the mandatory local checks:
+
+```bash
+go fmt ./...
+go vet ./...
+go test ./...
+go build ./...
+```
+
+Use extended checks when the change touches concurrency, terminal handling or broad shared behavior:
+
+```bash
+./scripts/qa.sh --race
+./scripts/qa.sh --cover
+```
+
+Pure unit tests must not require tmux, root privileges, network access or a graphical desktop. Tests that require a real tmux binary must call `t.Skip` with a clear message when tmux is unavailable.
 
 ## Technology decisions
 

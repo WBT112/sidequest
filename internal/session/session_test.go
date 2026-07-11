@@ -56,6 +56,21 @@ func TestCreateSessionPermissionsAndState(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsInvalidGeneratedSessionID(t *testing.T) {
+	manager := Manager{
+		BaseDir:     filepath.Join(t.TempDir(), "sidequest"),
+		IDGenerator: fixedID("../not-owned"),
+	}
+
+	_, err := manager.Create()
+	if err == nil {
+		t.Fatal("Create succeeded, want invalid session id error")
+	}
+	if !strings.Contains(err.Error(), "invalid session id") {
+		t.Fatalf("Create error = %v, want invalid session id", err)
+	}
+}
+
 func TestCommandIsNeverWrittenToRuntimeFiles(t *testing.T) {
 	manager := Manager{BaseDir: filepath.Join(t.TempDir(), "sidequest"), IDGenerator: fixedID("secret-test")}
 	session, err := manager.Create()

@@ -3,17 +3,57 @@ Play a tiny terminal game while waiting for a long-running command to finish.
 
 Your computer has a task. So do you.
 
+Sidequest turns terminal waiting time into a small playable break. Your command
+keeps running in the main pane, while Snake starts in the lower pane when you
+switch down and make the first move. When the command finishes, the game freezes
+on your final score and Sidequest shows the command result.
+
 sidequest -- sudo apt upgrade
 sidequest -- docker build .
 sidequest -- cargo build --release
 sidequest -- ansible-playbook upgrade.yml
 
-Sidequest runs your command in one terminal pane and opens a small retro game in another. When the command finishes, the game stops and Sidequest shows the exit status and runtime.
+Sidequest is meant for the boring middle of long commands: builds, upgrades,
+deployments and scripts that need to stay visible but do not need your constant
+attention.
 
 Requirements
 
 Sidequest currently targets Linux terminals with tmux available in PATH.
 The initial layout requires an interactive terminal of at least 80 columns by 24 rows.
+
+Local QA
+
+Run the complete normal local quality suite before committing:
+
+```bash
+./scripts/qa.sh
+```
+
+If Go is not available as `go` in `PATH`, point the script at the Go binary:
+
+```bash
+GO=/tmp/go/bin/go ./scripts/qa.sh
+```
+
+The script runs:
+
+```bash
+go fmt ./...
+go vet ./...
+go test ./...
+go build ./...
+```
+
+Extended checks are available when useful:
+
+```bash
+./scripts/qa.sh --race
+./scripts/qa.sh --cover
+./scripts/qa.sh --race --cover
+```
+
+Pure unit tests do not require tmux or a graphical desktop. Tests that exercise a real tmux server detect whether tmux is installed and skip clearly when it is unavailable.
 
 Goals
 

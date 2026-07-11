@@ -41,10 +41,32 @@ func TestParsePreservesShellSyntaxAsArguments(t *testing.T) {
 	}
 }
 
+func TestParsePreservesVariablesGlobsAndSpacesAsArguments(t *testing.T) {
+	result, err := Parse([]string{"--", "printf", "%s", "$HOME", "*.go", "value with spaces"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	want := []string{"%s", "$HOME", "*.go", "value with spaces"}
+	if !equalSlices(result.Config.Arguments, want) {
+		t.Fatalf("Arguments = %#v, want %#v", result.Config.Arguments, want)
+	}
+}
+
 func TestParseRejectsMissingCommandAfterSeparator(t *testing.T) {
 	_, err := Parse([]string{"--"})
 	if !errors.Is(err, ErrMissingCommand) {
 		t.Fatalf("Parse error = %v, want %v", err, ErrMissingCommand)
+	}
+}
+
+func TestParseRejectsUnknownSidequestOption(t *testing.T) {
+	_, err := Parse([]string{"--bogus", "--", "true"})
+	if err == nil {
+		t.Fatal("Parse succeeded, want unknown option error")
+	}
+	if !strings.Contains(err.Error(), "unknown option") {
+		t.Fatalf("Parse error = %v, want unknown option", err)
 	}
 }
 
