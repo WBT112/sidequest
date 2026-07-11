@@ -67,6 +67,16 @@ func (g *SnakeGame) Resize(width int, height int) {
 	*g = *NewSnakeGame(width, height, randomInt)
 }
 
+func (g *SnakeGame) Recover() {
+	score := g.Score
+	foodScore := g.FoodScore
+	randomInt := g.randomInt
+	*g = *NewSnakeGame(g.Width, g.Height, randomInt)
+	g.Score = score
+	g.FoodScore = foodScore
+	g.Over = false
+}
+
 func (g *SnakeGame) ChangeDirection(direction Direction) {
 	if g.Over || direction == g.Dir {
 		return
@@ -108,6 +118,12 @@ func (g *SnakeGame) Step() StepResult {
 
 	g.Snake = g.Snake[:len(g.Snake)-1]
 	return StepMoved
+}
+
+func (g *SnakeGame) NextPoint() Point {
+	head := g.Snake[0]
+	delta := directionDelta(g.Dir)
+	return Point{X: head.X + delta.X, Y: head.Y + delta.Y}
 }
 
 func (g *SnakeGame) PlaceFood() bool {

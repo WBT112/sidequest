@@ -4,6 +4,8 @@ package game
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +91,76 @@ func TestRunDisplaysCommandHeatInHUD(t *testing.T) {
 
 	waitForRenderedText(t, screen, "Heat: 3/6")
 	waitForRenderedText(t, screen, "Score x1.4")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
+func TestRunDisplaysQuestModeHUD(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(80, 12)
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning, GameMode: GameModeQuest}, nil
+		},
+		PollInterval: time.Hour,
+		Now:          func() time.Time { return now },
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Sidequest Snake [quest]")
+	waitForRenderedText(t, screen, "COMBO x0")
+	waitForRenderedText(t, screen, "QUEST:")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
+func TestRunUpdatesQuestStatsWhenCommandFinishes(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(80, 12)
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	started := now.Add(-time.Minute)
+	states := make(chan session.State, 4)
+	states <- session.State{Status: session.StatusRunning, StartedAt: &started, GameMode: GameModeQuest}
+	states <- session.State{Status: session.StatusCompleted, StartedAt: &started, DurationMillis: int64Ptr(60_000), GameMode: GameModeQuest}
+	statsDir := filepath.Join(t.TempDir(), "sidequest")
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			select {
+			case state := <-states:
+				return state, nil
+			default:
+				return session.State{Status: session.StatusCompleted, StartedAt: &started, DurationMillis: int64Ptr(60_000), GameMode: GameModeQuest}, nil
+			}
+		},
+		PollInterval: 20 * time.Millisecond,
+		StatsManager: StatsManager{
+			BaseDir: statsDir,
+		},
+		Now: func() time.Time { return now },
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "RUN FINISHED")
+	if _, err := os.Stat(filepath.Join(statsDir, statsFileName)); err != nil {
+		t.Fatalf("stats file was not written: %v", err)
+	}
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
 
 	if err := <-errc; err != nil {
@@ -478,6 +550,10 @@ func screenText(screen tcell.SimulationScreen) string {
 		builder.WriteByte('\n')
 	}
 	return builder.String()
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }
 
 type finalizingScreen struct {

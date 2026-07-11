@@ -28,6 +28,29 @@ func TestParseCommandAfterSeparator(t *testing.T) {
 	if got, want := result.Config.Arguments, []string{"1"}; !equalSlices(got, want) {
 		t.Fatalf("Arguments = %#v, want %#v", got, want)
 	}
+	if result.Config.Mode != "classic" {
+		t.Fatalf("Mode = %q, want classic", result.Config.Mode)
+	}
+}
+
+func TestParseModeBeforeSeparator(t *testing.T) {
+	result, err := Parse([]string{"--mode", "quest", "--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if result.Config.Mode != "quest" {
+		t.Fatalf("Mode = %q, want quest", result.Config.Mode)
+	}
+	if result.Config.Executable != "sleep" {
+		t.Fatalf("Executable = %q, want sleep", result.Config.Executable)
+	}
+}
+
+func TestParseRejectsUnknownMode(t *testing.T) {
+	_, err := Parse([]string{"--mode", "arena", "--", "true"})
+	if err == nil || !strings.Contains(err.Error(), "unknown mode") {
+		t.Fatalf("Parse error = %v, want unknown mode", err)
+	}
 }
 
 func TestParsePreservesShellSyntaxAsArguments(t *testing.T) {
@@ -200,6 +223,34 @@ func TestRunCommandCreatesSessionAndHandoffsCommand(t *testing.T) {
 	}
 	if out.String() != "" {
 		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+}
+
+func TestRunCommandStoresSelectedGameMode(t *testing.T) {
+	var out bytes.Buffer
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("quest-mode")}
+	app := App{
+		Out:       &out,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			return manager.Create()
+		},
+		RunLayout: func(gotSession session.Session, gotCommand session.Command) error {
+			state, err := session.ReadState(gotSession)
+			if err != nil {
+				t.Fatalf("ReadState returned error: %v", err)
+			}
+			if state.GameMode != "quest" {
+				t.Fatalf("GameMode = %q, want quest", state.GameMode)
+			}
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"--mode=quest", "--", "true"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
 	}
 }
 

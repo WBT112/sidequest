@@ -32,6 +32,7 @@ const usage = `Usage:
 Options:
   -h, --help       Show this help text.
   -v, --version    Show the sidequest version.
+  --mode <mode>    Select game mode: classic or quest.
 
 The -- separator marks the end of Sidequest options and the start of the
 command to run. Command arguments are preserved exactly and are not passed
@@ -46,6 +47,7 @@ var (
 type Config struct {
 	Executable string
 	Arguments  []string
+	Mode       string
 }
 
 type Result struct {
@@ -188,6 +190,14 @@ func (a App) Run(args []string) int {
 			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
 			return 2
 		}
+		if runtimeSession.StatePath != "" {
+			if err := session.UpdateState(runtimeSession, a.now(), func(state *session.State) {
+				state.GameMode = result.Config.Mode
+			}); err != nil {
+				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+				return 2
+			}
+		}
 
 		if err := a.runLayout(runtimeSession, command); err != nil {
 			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
@@ -203,15 +213,35 @@ func Parse(args []string) (Result, error) {
 		return Result{}, ErrMissingSeparator
 	}
 
-	for index, arg := range args {
+	mode := game.GameModeClassic
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
 		switch arg {
 		case "-h", "--help":
 			return Result{ShowHelp: true}, nil
 		case "-v", "--version":
 			return Result{ShowVersion: true}, nil
+		case "--mode":
+			if index+1 >= len(args) {
+				return Result{}, fmt.Errorf("--mode requires classic or quest")
+			}
+			selectedMode, err := parseMode(args[index+1])
+			if err != nil {
+				return Result{}, err
+			}
+			mode = selectedMode
+			index++
 		case "--":
-			return parseCommand(args[index+1:])
+			return parseCommand(args[index+1:], mode)
 		default:
+			if strings.HasPrefix(arg, "--mode=") {
+				selectedMode, err := parseMode(strings.TrimPrefix(arg, "--mode="))
+				if err != nil {
+					return Result{}, err
+				}
+				mode = selectedMode
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				return Result{}, fmt.Errorf("unknown option %q", arg)
 			}
@@ -221,11 +251,20 @@ func Parse(args []string) (Result, error) {
 	return Result{}, ErrMissingSeparator
 }
 
+func parseMode(mode string) (string, error) {
+	switch mode {
+	case game.GameModeClassic, game.GameModeQuest:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("unknown mode %q", mode)
+	}
+}
+
 func Usage() string {
 	return usage
 }
 
-func parseCommand(args []string) (Result, error) {
+func parseCommand(args []string, mode string) (Result, error) {
 	if len(args) == 0 || args[0] == "" {
 		return Result{}, ErrMissingCommand
 	}
@@ -234,6 +273,7 @@ func parseCommand(args []string) (Result, error) {
 		Config: Config{
 			Executable: args[0],
 			Arguments:  append([]string(nil), args[1:]...),
+			Mode:       mode,
 		},
 	}, nil
 }

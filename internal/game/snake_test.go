@@ -136,6 +136,22 @@ func TestSnakeResizeRestartsBoardSafely(t *testing.T) {
 	}
 }
 
+func TestSnakeRecoverPreservesScoreAndClearsGameOver(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Score = 42
+	game.FoodScore = 17
+	game.Over = true
+
+	game.Recover()
+
+	if game.Over {
+		t.Fatal("Over = true, want false")
+	}
+	if game.Score != 42 || game.FoodScore != 17 {
+		t.Fatalf("score=%d foodScore=%d, want preserved", game.Score, game.FoodScore)
+	}
+}
+
 func TestSnakeRejectsImmediateReverseWhenLongerThanOne(t *testing.T) {
 	game := NewSnakeGame(5, 5, func(int) int { return 0 })
 	game.Snake = []Point{{X: 2, Y: 2}, {X: 1, Y: 2}}

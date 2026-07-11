@@ -21,6 +21,8 @@ type Shell struct {
 	ReadState      StateReader
 	OnQuitActive   func() error
 	OnQuitTerminal func() error
+	Random         RandomSource
+	StatsManager   StatsManager
 	PollInterval   time.Duration
 	GameInterval   time.Duration
 	Now            func() time.Time
@@ -42,6 +44,9 @@ type viewState struct {
 	RoundStarted time.Time
 	RoundHeat    int
 	RoundCatchUp bool
+	Quest        *QuestState
+	FinalScore   ScoreBreakdown
+	StatsMessage string
 }
 
 func (s Shell) Run(ctx context.Context) error {
@@ -87,6 +92,8 @@ func (s Shell) Run(ctx context.Context) error {
 	}
 	now := s.now()
 	game := newSnakeGameForScreen(screen)
+	mode := gameMode(state.GameMode)
+	boardWidth, boardHeight := boardSize(screen)
 	view := viewState{
 		State:        state,
 		SessionState: state.Status,
@@ -94,9 +101,10 @@ func (s Shell) Run(ctx context.Context) error {
 		Game:         game,
 		RoundStarted: now,
 		RoundHeat:    1,
+		Quest:        NewQuestState(mode, now, s.Random, boardWidth, boardHeight),
 	}
 	updateViewHeat(&view, now)
-	nextMove := now.Add(activeMoveInterval(view, gameIntervalOverride))
+	nextMove := now.Add(activeMoveInterval(view, gameIntervalOverride, now))
 	render(screen, view)
 
 	for {
@@ -118,6 +126,9 @@ func (s Shell) Run(ctx context.Context) error {
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'p' || typed.Rune() == 'P'):
 					view.Paused = !view.Paused
 					render(screen, view)
+				case typed.Key() == tcell.KeyRune && typed.Rune() >= '1' && typed.Rune() <= '3' && view.Quest.Enabled() && len(view.Quest.PendingChoices) > 0:
+					view.Quest.ApplyUpgrade(int(typed.Rune()-'1'), s.now())
+					render(screen, view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'r' || typed.Rune() == 'R') && !view.Frozen && game.Over:
 					now := s.now()
 					game = newSnakeGameForScreen(screen)
@@ -127,14 +138,18 @@ func (s Shell) Run(ctx context.Context) error {
 					view.RoundStarted = now
 					view.RoundHeat = RestartStartHeat(view.CommandHeat.Level)
 					view.RoundCatchUp = view.RoundHeat < view.CommandHeat.Level
+					if view.Quest.Enabled() {
+						view.Quest.OnCrash()
+					}
 					updateViewHeat(&view, now)
-					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride))
+					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, now))
 					render(screen, view)
 				default:
 					if direction, ok := directionFromKey(typed); ok && !view.Frozen && !game.Over {
 						view.Started = true
 						game.ChangeDirection(direction)
-						nextMove = s.now().Add(activeMoveInterval(view, gameIntervalOverride))
+						now := s.now()
+						nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, now))
 						render(screen, view)
 					}
 				}
@@ -148,7 +163,10 @@ func (s Shell) Run(ctx context.Context) error {
 		case <-movementPulse.C:
 			now := s.now()
 			heatChanged := updateViewHeat(&view, now)
-			if view.Started && !view.Paused && !view.Frozen && !game.Over {
+			if view.Quest.Enabled() {
+				view.Quest.Tick(game, view.Heat, now)
+			}
+			if view.Started && !view.Paused && !view.Frozen && !game.Over && !upgradeSelectionActive(view) {
 				if now.Before(nextMove) {
 					if heatChanged {
 						render(screen, view)
@@ -156,8 +174,14 @@ func (s Shell) Run(ctx context.Context) error {
 					continue
 				}
 				game.FoodScore = view.Heat.ScoreAward(baseFoodScore)
-				game.Step()
-				nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride))
+				result := stepGame(game, view.Quest, view.Heat, now)
+				if (result == StepHitWall || result == StepHitSelf) && view.Quest.Enabled() && view.Quest.TryShieldRecovery(game) {
+					result = StepMoved
+				}
+				if game.Over && view.Quest.Enabled() {
+					view.Quest.OnCrash()
+				}
+				nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, now))
 				render(screen, view)
 				continue
 			}
@@ -175,12 +199,56 @@ func (s Shell) Run(ctx context.Context) error {
 			view.State = state
 			view.SessionState = state.Status
 			if session.IsTerminalStatus(state.Status) {
-				view.Frozen = true
+				freezeView(&view, s.now(), s.StatsManager)
 			}
 			updateViewHeat(&view, s.now())
 			render(screen, view)
 		}
 	}
+}
+
+func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time) StepResult {
+	if quest.Enabled() && quest.Golden.Active && game.NextPoint() == quest.Golden.Position {
+		game.Food = quest.Golden.Position
+		result := game.Step()
+		if result == StepAteFood {
+			quest.OnGoldenByte(game, heat, now)
+		}
+		return result
+	}
+	result := game.Step()
+	if result == StepAteFood && quest.Enabled() {
+		quest.OnNormalFood(game, heat, now)
+	}
+	return result
+}
+
+func freezeView(view *viewState, now time.Time, statsManager StatsManager) {
+	if view.Frozen {
+		return
+	}
+	view.Frozen = true
+	if view.Quest.Enabled() {
+		view.FinalScore = view.Quest.Complete(view.Game, view.Heat, now)
+		manager := statsManager
+		if manager.BaseDir == "" {
+			manager = DefaultStatsManager()
+		}
+		if _, err := manager.UpdateQuest(view.FinalScore, view.Quest); err != nil {
+			view.StatsMessage = "Stats not saved: " + err.Error()
+		}
+	}
+}
+
+func gameMode(mode string) string {
+	if mode == GameModeQuest {
+		return GameModeQuest
+	}
+	return GameModeClassic
+}
+
+func upgradeSelectionActive(view viewState) bool {
+	return view.Quest.Enabled() && len(view.Quest.PendingChoices) > 0 && !view.Frozen
 }
 
 func (s Shell) now() time.Time {
@@ -239,12 +307,18 @@ func render(screen tcell.Screen, view viewState) {
 	if view.Game != nil && view.Game.Over && !view.Frozen {
 		controlLine = "Round over. R restart  Q exit/cleanup  F10 detach/list"
 	}
+	if view.Quest.Enabled() {
+		controlLine = questLine(view)
+	}
+	if upgradeSelectionActive(view) {
+		controlLine = upgradeChoiceLine(view.Quest.PendingChoices)
+	}
 	if view.HeatNotice != "" {
 		controlLine = view.HeatNotice
 	}
 
 	lines := []renderLine{
-		{0, "Sidequest Snake", titleStyle},
+		{0, "Sidequest Snake [" + gameModeLabel(view) + "]", titleStyle},
 		{1, "Command state: " + displayState(view.SessionState), statusStyle},
 		{2, heatScoreLine(view), scoreStyle},
 		{3, controlLine, secondaryStyle},
@@ -261,6 +335,7 @@ func render(screen tcell.Screen, view viewState) {
 	}
 
 	drawSnake(screen, view.Game, style)
+	drawGoldenByte(screen, view.Quest, style)
 	drawResultPanel(screen, view, style)
 
 	for _, line := range lines {
@@ -365,6 +440,19 @@ func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
 	}
 }
 
+func drawGoldenByte(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style) {
+	if !quest.Enabled() || !quest.Golden.Active {
+		return
+	}
+	boardX, boardY, boardWidth, boardHeight := boardBounds(screen)
+	point := quest.Golden.Position
+	if point.X < 0 || point.X >= boardWidth || point.Y < 0 || point.Y >= boardHeight {
+		return
+	}
+	style := baseStyle.Foreground(tcell.ColorOrange).Background(tcell.ColorDarkSlateGray).Bold(true)
+	screen.SetContent(boardX+point.X, boardY+point.Y, '$', nil, style)
+}
+
 func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style) {
 	if view.Game == nil || (!view.Game.Over && !view.Frozen) {
 		return
@@ -388,6 +476,14 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 		"Final score: " + scoreText(view.Game),
 		"Max heat: " + fmt.Sprintf("%d", view.MaxHeat),
 		action,
+	}
+	if view.Quest.Enabled() && view.FinalScore.FinalScore > 0 {
+		lines = []string{
+			title,
+			fmt.Sprintf("Final score: %d", view.FinalScore.FinalScore),
+			fmt.Sprintf("Mission %+d  Alive %+d", view.FinalScore.MissionBonus, view.FinalScore.SurvivalBonus),
+			fmt.Sprintf("Combo %+d  Heat %+d", view.FinalScore.MaxComboBonus, view.FinalScore.MaxHeatBonus),
+		}
 	}
 
 	panelWidth := maxTextWidth(lines) + 4
@@ -499,14 +595,18 @@ func commandElapsed(state session.State, now time.Time) time.Duration {
 	return now.Sub(*state.StartedAt)
 }
 
-func activeMoveInterval(view viewState, override time.Duration) time.Duration {
+func activeMoveInterval(view viewState, override time.Duration, now time.Time) time.Duration {
 	if override > 0 {
 		return override
 	}
 	if view.Heat.MovementInterval <= 0 {
 		return HeatByLevel(1).MovementInterval
 	}
-	return view.Heat.MovementInterval
+	interval := view.Heat.MovementInterval
+	if view.Quest.Enabled() {
+		interval = view.Quest.EffectiveInterval(interval, now)
+	}
+	return interval
 }
 
 func heatTransitionText(heat HeatLevel) string {
@@ -518,13 +618,49 @@ func heatScoreLine(view viewState) string {
 	if heat.Level == 0 {
 		heat = HeatByLevel(1)
 	}
+	if view.Quest.Enabled() {
+		return fmt.Sprintf(
+			"SCORE %s  COMBO x%d  HEAT %d %s",
+			scoreText(view.Game),
+			view.Quest.Combo,
+			heat.Level,
+			heat.MultiplierText(),
+		)
+	}
 	return fmt.Sprintf(
-		"Score: %s  Heat: %d/%d  Score %s",
+		"MODE classic  Score: %s  Heat: %d/%d  Score %s",
 		scoreText(view.Game),
 		heat.Level,
 		MaxHeatLevel(),
 		heat.MultiplierText(),
 	)
+}
+
+func gameModeLabel(view viewState) string {
+	if view.Quest.Enabled() {
+		return GameModeQuest
+	}
+	return GameModeClassic
+}
+
+func questLine(view viewState) string {
+	if !view.Quest.Enabled() {
+		return ""
+	}
+	quest := view.Quest
+	if quest.Mission.ID == "" {
+		return "QUEST: none"
+	}
+	return fmt.Sprintf("QUEST: %s %d/%d", quest.Mission.Label, quest.MissionProgress, quest.Mission.Target)
+}
+
+func upgradeChoiceLine(choices []UpgradeChoice) string {
+	parts := make([]string, 0, len(choices)+1)
+	parts = append(parts, "CHOOSE")
+	for index, choice := range choices {
+		parts = append(parts, fmt.Sprintf("%d %s", index+1, choice.Label))
+	}
+	return joinParts(parts)
 }
 
 func directionFromKey(event *tcell.EventKey) (Direction, bool) {

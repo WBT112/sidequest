@@ -12,6 +12,7 @@ sidequest -- sudo apt upgrade
 sidequest -- docker build .
 sidequest -- cargo build --release
 sidequest -- ansible-playbook upgrade.yml
+sidequest --mode quest -- make test
 
 Try it with a harmless demo workload:
 
@@ -27,6 +28,10 @@ Snake uses Command Heat: as the wrapped command keeps running, the Heat level
 rises, Snake moves faster, and food awards a higher score multiplier. Heat is
 capped so long commands stay playable, and restarted rounds ramp back up instead
 of jumping straight to maximum speed.
+
+Use `--mode classic` for Snake with Command Heat only, or `--mode quest` for
+Combo scoring, rare Golden Bytes, one mission per command, upgrade choices,
+completion bonuses and local best-score tracking.
 
 `F10` detaches from tmux and keeps the Sidequest session listed for later attach.
 `Q` leaves the game pane; once the command is finished, Sidequest can clean up
@@ -48,6 +53,11 @@ Run history is stored under
 pane output plus result metadata, not the command or argument list. Terminal
 output can still contain sensitive data such as tokens, environment values, file
 contents or application data.
+
+Quest statistics are stored locally in
+`${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json`. They contain
+small game counters and achievements only, never command names, arguments,
+output, hostnames, working directories or activity timestamps.
 
 Sidequest is meant for the boring middle of long commands: builds, upgrades,
 deployments and scripts that need to stay visible but do not need your constant

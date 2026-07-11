@@ -34,6 +34,14 @@ Snake uses Command Heat. Heat rises with wrapped-command runtime, speeds up Snak
 movement, increases the food score multiplier, and is capped at the maximum Heat
 level. Restarted rounds ramp back toward the current command Heat.
 .PP
+Quest Mode displays combo, mission progress, upgrades and bonuses in the game
+HUD. Upgrade choices use keys
+.BR 1 ,
+.BR 2
+or
+.BR 3
+and pause only Snake movement, not the wrapped command.
+.PP
 Finished runs keep visible command-pane output locally under
 .IR "${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/" .
 Sidequest stores result metadata and pane output, but not the command or
@@ -49,6 +57,11 @@ Show help text.
 .TP
 .B \-v, \-\-version
 Show the Sidequest version.
+.TP
+.BI \-\-mode " classic|quest"
+Select the Snake mode. Classic keeps Snake with Command Heat only. Quest adds
+combo scoring, Golden Bytes, one mission, upgrade choices, completion bonuses
+and local game statistics.
 .SH COMMANDS
 .TP
 .B list
@@ -109,6 +122,11 @@ Installed manual page.
 .I ${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/
 Local stored run history. Captured terminal output may contain sensitive data
 such as tokens, environment values, file contents or application data.
+.TP
+.I ${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json
+Local Quest Mode statistics and achievements. This file stores game counters
+only, not command names, arguments, output, hostnames, working directories or
+activity timestamps.
 .SH EXIT STATUS
 Sidequest returns zero when setup and attach handling succeed. The command
 runner records the child command result in Sidequest session metadata.

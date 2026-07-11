@@ -53,6 +53,7 @@ type State struct {
 	ExitSignal     string     `json:"exit_signal,omitempty"`
 	StartError     string     `json:"start_error,omitempty"`
 	TmuxSocket     string     `json:"tmux_socket,omitempty"`
+	GameMode       string     `json:"game_mode,omitempty"`
 }
 
 type Manager struct {
