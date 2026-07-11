@@ -33,6 +33,7 @@ type SnakeGame struct {
 	Dir       Direction
 	Score     int
 	FoodScore int
+	FoodHeat  int
 	Over      bool
 
 	randomInt func(int) int
@@ -55,6 +56,7 @@ func NewSnakeGame(width int, height int, randomInt func(int) int) *SnakeGame {
 		Snake:     []Point{{X: width / 2, Y: height / 2}},
 		Dir:       DirectionRight,
 		FoodScore: 1,
+		FoodHeat:  1,
 		Food:      Point{X: -1, Y: -1},
 		randomInt: randomInt,
 	}
@@ -70,10 +72,12 @@ func (g *SnakeGame) Resize(width int, height int) {
 func (g *SnakeGame) Recover() {
 	score := g.Score
 	foodScore := g.FoodScore
+	foodHeat := g.FoodHeat
 	randomInt := g.randomInt
 	*g = *NewSnakeGame(g.Width, g.Height, randomInt)
 	g.Score = score
 	g.FoodScore = foodScore
+	g.FoodHeat = foodHeat
 	g.Over = false
 }
 
@@ -127,31 +131,13 @@ func (g *SnakeGame) NextPoint() Point {
 }
 
 func (g *SnakeGame) PlaceFood() bool {
-	occupied := make(map[Point]bool, len(g.Snake))
-	for _, point := range g.Snake {
-		occupied[point] = true
+	if point, ok := SelectReachableFood(g.Width, g.Height, g.Snake, nil, g.FoodHeat, g.randomInt); ok {
+		g.Food = point
+		return true
 	}
 
-	availableCapacity := g.Width*g.Height - len(occupied)
-	if availableCapacity < 0 {
-		availableCapacity = 0
-	}
-	available := make([]Point, 0, availableCapacity)
-	for y := 0; y < g.Height; y++ {
-		for x := 0; x < g.Width; x++ {
-			point := Point{X: x, Y: y}
-			if !occupied[point] {
-				available = append(available, point)
-			}
-		}
-	}
-	if len(available) == 0 {
-		g.Food = Point{X: -1, Y: -1}
-		return false
-	}
-
-	g.Food = available[g.randomInt(len(available))]
-	return true
+	g.Food = Point{X: -1, Y: -1}
+	return false
 }
 
 func (g *SnakeGame) collidesWithSnake(point Point, willGrow bool) bool {

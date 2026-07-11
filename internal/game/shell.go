@@ -174,6 +174,7 @@ func (s Shell) Run(ctx context.Context) error {
 					continue
 				}
 				game.FoodScore = view.Heat.ScoreAward(baseFoodScore)
+				game.FoodHeat = view.Heat.Level
 				result := stepGame(game, view.Quest, view.Heat, now)
 				if (result == StepHitWall || result == StepHitSelf) && view.Quest.Enabled() && view.Quest.TryShieldRecovery(game) {
 					result = StepMoved
@@ -357,38 +358,27 @@ func newSnakeGameForScreen(screen tcell.Screen) *SnakeGame {
 }
 
 func boardSize(screen tcell.Screen) (int, int) {
-	_, _, width, height := boardBounds(screen)
-	return width, height
+	arena := arenaForScreen(screen)
+	return arena.Width, arena.Height
 }
 
 func boardBounds(screen tcell.Screen) (int, int, int, int) {
-	screenWidth, screenHeight := screen.Size()
-	if screenWidth <= 0 || screenHeight <= 0 {
-		return 0, 0, 1, 1
-	}
+	arena := arenaForScreen(screen)
+	return arena.X, arena.Y, arena.Width, arena.Height
+}
 
-	x := 1
-	y := 5
-	width := screenWidth - 2
-	height := screenHeight - y - 1
-	if screenHeight < 8 {
-		y = 1
-		height = screenHeight - 2
-	}
-	if width < 1 {
-		width = 1
-	}
-	if height < 1 {
-		height = 1
-	}
-	return x, y, width, height
+func arenaForScreen(screen tcell.Screen) Arena {
+	width, height := screen.Size()
+	return ArenaForScreen(width, height)
 }
 
 func drawPlayfield(screen tcell.Screen, style tcell.Style) {
 	width, height := screen.Size()
-	boardX, boardY, boardWidth, boardHeight := boardBounds(screen)
-	topWallY := boardY - 1
-	bottomWallY := boardY + boardHeight
+	arena := arenaForScreen(screen)
+	topWallY := arena.Y - 1
+	bottomWallY := arena.Y + arena.Height
+	leftWallX := arena.X - 1
+	rightWallX := arena.X + arena.RenderWidth()
 	if width < 2 || height < 8 || topWallY <= 0 || bottomWallY >= height {
 		return
 	}
@@ -396,18 +386,18 @@ func drawPlayfield(screen tcell.Screen, style tcell.Style) {
 	boardStyle := style.Background(tcell.ColorDarkSlateGray)
 	wallStyle := style.Foreground(tcell.ColorTeal).Background(tcell.ColorTeal).Bold(true)
 
-	for y := boardY; y < boardY+boardHeight; y++ {
-		for x := boardX; x < boardX+boardWidth; x++ {
+	for y := arena.Y; y < arena.Y+arena.Height; y++ {
+		for x := arena.X; x < arena.X+arena.RenderWidth(); x++ {
 			screen.SetContent(x, y, ' ', nil, boardStyle)
 		}
 	}
-	for x := 0; x < width; x++ {
+	for x := leftWallX; x <= rightWallX; x++ {
 		screen.SetContent(x, topWallY, tcell.RuneBlock, nil, wallStyle)
 		screen.SetContent(x, bottomWallY, tcell.RuneBlock, nil, wallStyle)
 	}
-	for y := boardY; y < bottomWallY; y++ {
-		screen.SetContent(0, y, tcell.RuneBlock, nil, wallStyle)
-		screen.SetContent(width-1, y, tcell.RuneBlock, nil, wallStyle)
+	for y := arena.Y; y < bottomWallY; y++ {
+		screen.SetContent(leftWallX, y, tcell.RuneBlock, nil, wallStyle)
+		screen.SetContent(rightWallX, y, tcell.RuneBlock, nil, wallStyle)
 	}
 }
 
@@ -416,27 +406,27 @@ func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
 		return
 	}
 
-	boardX, boardY, boardWidth, boardHeight := boardBounds(screen)
+	arena := arenaForScreen(screen)
 	boardBackground := tcell.ColorDarkSlateGray
 	foodStyle := baseStyle.Foreground(tcell.ColorYellow).Background(boardBackground).Bold(true)
 	bodyStyle := baseStyle.Foreground(tcell.ColorLimeGreen).Background(boardBackground)
 	headStyle := bodyStyle.Bold(true)
 
-	if game.Food.X >= 0 && game.Food.X < boardWidth && game.Food.Y >= 0 && game.Food.Y < boardHeight {
-		screen.SetContent(boardX+game.Food.X, boardY+game.Food.Y, '*', nil, foodStyle)
+	if game.Food.X >= 0 && game.Food.X < arena.Width && game.Food.Y >= 0 && game.Food.Y < arena.Height {
+		drawCell(screen, arena, game.Food, "()", foodStyle)
 	}
 	for index := len(game.Snake) - 1; index >= 0; index-- {
 		point := game.Snake[index]
-		if point.X < 0 || point.X >= boardWidth || point.Y < 0 || point.Y >= boardHeight {
+		if point.X < 0 || point.X >= arena.Width || point.Y < 0 || point.Y >= arena.Height {
 			continue
 		}
-		cell := 'o'
+		cell := "▓▓"
 		style := bodyStyle
 		if index == 0 {
-			cell = '@'
+			cell = "██"
 			style = headStyle
 		}
-		screen.SetContent(boardX+point.X, boardY+point.Y, cell, nil, style)
+		drawCell(screen, arena, point, cell, style)
 	}
 }
 
@@ -444,13 +434,26 @@ func drawGoldenByte(screen tcell.Screen, quest *QuestState, baseStyle tcell.Styl
 	if !quest.Enabled() || !quest.Golden.Active {
 		return
 	}
-	boardX, boardY, boardWidth, boardHeight := boardBounds(screen)
+	arena := arenaForScreen(screen)
 	point := quest.Golden.Position
-	if point.X < 0 || point.X >= boardWidth || point.Y < 0 || point.Y >= boardHeight {
+	if point.X < 0 || point.X >= arena.Width || point.Y < 0 || point.Y >= arena.Height {
 		return
 	}
 	style := baseStyle.Foreground(tcell.ColorOrange).Background(tcell.ColorDarkSlateGray).Bold(true)
-	screen.SetContent(boardX+point.X, boardY+point.Y, '$', nil, style)
+	drawCell(screen, arena, point, "<>", style)
+}
+
+func drawCell(screen tcell.Screen, arena Arena, point Point, text string, style tcell.Style) {
+	x := arena.CellX(point.X)
+	y := arena.CellY(point.Y)
+	runes := []rune(text)
+	for index := 0; index < arenaCellWidth; index++ {
+		cell := ' '
+		if index < len(runes) {
+			cell = runes[index]
+		}
+		screen.SetContent(x+index, y, cell, nil, style)
+	}
 }
 
 func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style) {
@@ -458,8 +461,8 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 		return
 	}
 
-	boardX, boardY, boardWidth, boardHeight := boardBounds(screen)
-	if boardWidth < 16 || boardHeight < 5 {
+	arena := arenaForScreen(screen)
+	if arena.RenderWidth() < 16 || arena.Height < 5 {
 		return
 	}
 
@@ -490,15 +493,15 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 	if panelWidth < 24 {
 		panelWidth = 24
 	}
-	if panelWidth > boardWidth {
-		panelWidth = boardWidth
+	if panelWidth > arena.RenderWidth() {
+		panelWidth = arena.RenderWidth()
 	}
 	panelHeight := 8
-	if boardHeight < panelHeight {
+	if arena.Height < panelHeight {
 		panelHeight = 6
 	}
-	panelX := boardX + (boardWidth-panelWidth)/2
-	panelY := boardY + (boardHeight-panelHeight)/2
+	panelX := arena.X + (arena.RenderWidth()-panelWidth)/2
+	panelY := arena.Y + (arena.Height-panelHeight)/2
 
 	panelStyle := baseStyle.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
 	borderStyle := baseStyle.Foreground(accent).Background(tcell.ColorBlack).Bold(true)

@@ -29,6 +29,10 @@ rises, Snake moves faster, and food awards a higher score multiplier. Heat is
 capped so long commands stay playable, and restarted rounds ramp back up instead
 of jumping straight to maximum speed.
 
+The Snake arena stays compact even in large panes, renders each logical cell as
+two terminal columns, and places food on reachable cells at sensible distances
+for the current Heat level.
+
 Use `--mode classic` for Snake with Command Heat only, or `--mode quest` for
 Combo scoring, rare Golden Bytes, one mission per command, upgrade choices,
 completion bonuses and local best-score tracking.
