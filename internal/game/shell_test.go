@@ -68,6 +68,93 @@ func TestRunTogglesPause(t *testing.T) {
 	}
 }
 
+func TestRunDisplaysCommandHeatInHUD(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(70, 12)
+	now := time.Date(2026, 7, 11, 18, 1, 0, 0, time.UTC)
+	started := now.Add(-60 * time.Second)
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning, StartedAt: &started}, nil
+		},
+		PollInterval: time.Hour,
+		Now:          func() time.Time { return now },
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Heat: 3/6")
+	waitForRenderedText(t, screen, "Score x1.4")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
+func TestRunWarnsBeforeCommandHeatRises(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(70, 12)
+	now := time.Date(2026, 7, 11, 18, 0, 25, 0, time.UTC)
+	started := now.Add(-25 * time.Second)
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning, StartedAt: &started}, nil
+		},
+		PollInterval: time.Hour,
+		Now:          func() time.Time { return now },
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "COMMAND HEAT RISING")
+	waitForRenderedText(t, screen, "SPEED 2")
+	waitForRenderedText(t, screen, "SCORE x1.2")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
+func TestRunFreezesCommandHeatWhenCommandAlreadyFinished(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(70, 12)
+	now := time.Date(2026, 7, 11, 19, 0, 0, 0, time.UTC)
+	durationMillis := int64(29_999)
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusCompleted, DurationMillis: &durationMillis}, nil
+		},
+		PollInterval: time.Hour,
+		Now:          func() time.Time { return now },
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Heat: 1/6")
+	if strings.Contains(screenText(screen), "Heat: 2/6") {
+		t.Fatalf("finished command heat kept progressing:\n%s", screenText(screen))
+	}
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
 func TestRunCallsActiveQuitHookForRunningCommand(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(40, 10)

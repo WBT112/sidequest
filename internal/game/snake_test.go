@@ -38,6 +38,23 @@ func TestSnakeGrowsAndScoresAfterEatingFood(t *testing.T) {
 	}
 }
 
+func TestSnakeUsesConfiguredFoodScore(t *testing.T) {
+	game := NewSnakeGame(5, 3, func(int) int { return 0 })
+	game.Snake = []Point{{X: 1, Y: 1}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 2, Y: 1}
+	game.FoodScore = 17
+
+	result := game.Step()
+
+	if result != StepAteFood {
+		t.Fatalf("Step result = %v, want %v", result, StepAteFood)
+	}
+	if game.Score != 17 {
+		t.Fatalf("Score = %d, want 17", game.Score)
+	}
+}
+
 func TestSnakeEndsRoundOnWallCollision(t *testing.T) {
 	game := NewSnakeGame(3, 3, func(int) int { return 0 })
 	game.Snake = []Point{{X: 2, Y: 1}}

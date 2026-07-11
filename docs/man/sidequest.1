@@ -30,6 +30,10 @@ The game pane is focused first and starts on the first move. When the command
 finishes, the game freezes and Sidequest shows the command state, exit code or
 signal, runtime, and final score.
 .PP
+Snake uses Command Heat. Heat rises with wrapped-command runtime, speeds up Snake
+movement, increases the food score multiplier, and is capped at the maximum Heat
+level. Restarted rounds ramp back toward the current command Heat.
+.PP
 Finished runs keep visible command-pane output locally under
 .IR "${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/" .
 Sidequest stores result metadata and pane output, but not the command or

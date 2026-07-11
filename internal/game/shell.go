@@ -11,7 +11,8 @@ import (
 )
 
 const DefaultPollInterval = 250 * time.Millisecond
-const DefaultGameInterval = 250 * time.Millisecond
+const DefaultGameInterval = 0
+const movementPulseInterval = 10 * time.Millisecond
 
 type StateReader func() (session.State, error)
 
@@ -22,6 +23,7 @@ type Shell struct {
 	OnQuitTerminal func() error
 	PollInterval   time.Duration
 	GameInterval   time.Duration
+	Now            func() time.Time
 }
 
 type viewState struct {
@@ -32,6 +34,14 @@ type viewState struct {
 	Message      string
 	Started      bool
 	Game         *SnakeGame
+	CommandHeat  HeatLevel
+	Heat         HeatLevel
+	MaxHeat      int
+	HeatNotice   string
+	NoticeUntil  time.Time
+	RoundStarted time.Time
+	RoundHeat    int
+	RoundCatchUp bool
 }
 
 func (s Shell) Run(ctx context.Context) error {
@@ -56,10 +66,7 @@ func (s Shell) Run(ctx context.Context) error {
 	if pollInterval <= 0 {
 		pollInterval = DefaultPollInterval
 	}
-	gameInterval := s.GameInterval
-	if gameInterval <= 0 {
-		gameInterval = DefaultGameInterval
-	}
+	gameIntervalOverride := s.GameInterval
 
 	events := make(chan tcell.Event, 8)
 	done := make(chan struct{})
@@ -71,15 +78,25 @@ func (s Shell) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
-	gameTicker := time.NewTicker(gameInterval)
-	defer gameTicker.Stop()
+	movementPulse := time.NewTicker(movementPulseInterval)
+	defer movementPulse.Stop()
 
 	state, err := s.ReadState()
 	if err != nil {
 		return err
 	}
+	now := s.now()
 	game := newSnakeGameForScreen(screen)
-	view := viewState{State: state, SessionState: state.Status, Frozen: terminalState(state.Status), Game: game}
+	view := viewState{
+		State:        state,
+		SessionState: state.Status,
+		Frozen:       terminalState(state.Status),
+		Game:         game,
+		RoundStarted: now,
+		RoundHeat:    1,
+	}
+	updateViewHeat(&view, now)
+	nextMove := now.Add(activeMoveInterval(view, gameIntervalOverride))
 	render(screen, view)
 
 	for {
@@ -102,15 +119,22 @@ func (s Shell) Run(ctx context.Context) error {
 					view.Paused = !view.Paused
 					render(screen, view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'r' || typed.Rune() == 'R') && !view.Frozen && game.Over:
+					now := s.now()
 					game = newSnakeGameForScreen(screen)
 					view.Game = game
 					view.Started = false
 					view.Paused = false
+					view.RoundStarted = now
+					view.RoundHeat = RestartStartHeat(view.CommandHeat.Level)
+					view.RoundCatchUp = view.RoundHeat < view.CommandHeat.Level
+					updateViewHeat(&view, now)
+					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride))
 					render(screen, view)
 				default:
 					if direction, ok := directionFromKey(typed); ok && !view.Frozen && !game.Over {
 						view.Started = true
 						game.ChangeDirection(direction)
+						nextMove = s.now().Add(activeMoveInterval(view, gameIntervalOverride))
 						render(screen, view)
 					}
 				}
@@ -121,9 +145,23 @@ func (s Shell) Run(ctx context.Context) error {
 				}
 				render(screen, view)
 			}
-		case <-gameTicker.C:
+		case <-movementPulse.C:
+			now := s.now()
+			heatChanged := updateViewHeat(&view, now)
 			if view.Started && !view.Paused && !view.Frozen && !game.Over {
+				if now.Before(nextMove) {
+					if heatChanged {
+						render(screen, view)
+					}
+					continue
+				}
+				game.FoodScore = view.Heat.ScoreAward(baseFoodScore)
 				game.Step()
+				nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride))
+				render(screen, view)
+				continue
+			}
+			if heatChanged {
 				render(screen, view)
 			}
 		case <-ticker.C:
@@ -139,9 +177,17 @@ func (s Shell) Run(ctx context.Context) error {
 			if session.IsTerminalStatus(state.Status) {
 				view.Frozen = true
 			}
+			updateViewHeat(&view, s.now())
 			render(screen, view)
 		}
 	}
+}
+
+func (s Shell) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 func pollEvents(screen tcell.Screen, events chan<- tcell.Event, done <-chan struct{}) {
@@ -193,11 +239,14 @@ func render(screen tcell.Screen, view viewState) {
 	if view.Game != nil && view.Game.Over && !view.Frozen {
 		controlLine = "Round over. R restart  Q exit/cleanup  F10 detach/list"
 	}
+	if view.HeatNotice != "" {
+		controlLine = view.HeatNotice
+	}
 
 	lines := []renderLine{
 		{0, "Sidequest Snake", titleStyle},
 		{1, "Command state: " + displayState(view.SessionState), statusStyle},
-		{2, "Score: " + scoreText(view.Game), scoreStyle},
+		{2, heatScoreLine(view), scoreStyle},
 		{3, controlLine, secondaryStyle},
 	}
 	if session.IsTerminalStatus(view.SessionState) {
@@ -337,6 +386,7 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 	lines := []string{
 		title,
 		"Final score: " + scoreText(view.Game),
+		"Max heat: " + fmt.Sprintf("%d", view.MaxHeat),
 		action,
 	}
 
@@ -347,9 +397,9 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 	if panelWidth > boardWidth {
 		panelWidth = boardWidth
 	}
-	panelHeight := 7
+	panelHeight := 8
 	if boardHeight < panelHeight {
-		panelHeight = 5
+		panelHeight = 6
 	}
 	panelX := boardX + (boardWidth-panelWidth)/2
 	panelY := boardY + (boardHeight-panelHeight)/2
@@ -359,7 +409,7 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
 	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
 
-	lineYs := []int{panelY + 1, panelY + panelHeight/2, panelY + panelHeight - 2}
+	lineYs := []int{panelY + 1, panelY + 2, panelY + panelHeight - 3, panelY + panelHeight - 2}
 	for index, line := range lines {
 		lineStyle := panelStyle
 		if index == 0 {
@@ -398,6 +448,83 @@ func maxTextWidth(lines []string) int {
 
 func textDisplayWidth(text string) int {
 	return len([]rune(text))
+}
+
+func updateViewHeat(view *viewState, now time.Time) bool {
+	previousCommandHeat := view.CommandHeat.Level
+	previousHeat := view.Heat.Level
+	previousNotice := view.HeatNotice
+
+	elapsed := commandElapsed(view.State, now)
+	commandHeat := HeatForElapsed(elapsed)
+	view.CommandHeat = commandHeat
+	if view.MaxHeat < commandHeat.Level {
+		view.MaxHeat = commandHeat.Level
+	}
+
+	activeLevel := commandHeat.Level
+	if view.RoundCatchUp {
+		activeLevel = RestartRampHeat(commandHeat.Level, view.RoundHeat, now.Sub(view.RoundStarted))
+	}
+	view.Heat = HeatByLevel(activeLevel)
+
+	view.HeatNotice = ""
+	if !view.Frozen {
+		if previousCommandHeat > 0 && commandHeat.Level > previousCommandHeat {
+			view.HeatNotice = heatTransitionText(commandHeat)
+			view.NoticeUntil = now.Add(3 * time.Second)
+		}
+		if view.HeatNotice == "" && now.Before(view.NoticeUntil) {
+			view.HeatNotice = heatTransitionText(commandHeat)
+		}
+		if view.HeatNotice == "" {
+			if next, remaining, ok := UpcomingHeat(elapsed); ok && remaining <= heatWarningWindow {
+				view.HeatNotice = heatTransitionText(next)
+			}
+		}
+	}
+
+	return previousCommandHeat != view.CommandHeat.Level ||
+		previousHeat != view.Heat.Level ||
+		previousNotice != view.HeatNotice
+}
+
+func commandElapsed(state session.State, now time.Time) time.Duration {
+	if state.DurationMillis != nil {
+		return time.Duration(*state.DurationMillis) * time.Millisecond
+	}
+	if state.StartedAt == nil {
+		return 0
+	}
+	return now.Sub(*state.StartedAt)
+}
+
+func activeMoveInterval(view viewState, override time.Duration) time.Duration {
+	if override > 0 {
+		return override
+	}
+	if view.Heat.MovementInterval <= 0 {
+		return HeatByLevel(1).MovementInterval
+	}
+	return view.Heat.MovementInterval
+}
+
+func heatTransitionText(heat HeatLevel) string {
+	return fmt.Sprintf("COMMAND HEAT RISING... SPEED %d  SCORE %s", heat.Level, heat.MultiplierText())
+}
+
+func heatScoreLine(view viewState) string {
+	heat := view.Heat
+	if heat.Level == 0 {
+		heat = HeatByLevel(1)
+	}
+	return fmt.Sprintf(
+		"Score: %s  Heat: %d/%d  Score %s",
+		scoreText(view.Game),
+		heat.Level,
+		MaxHeatLevel(),
+		heat.MultiplierText(),
+	)
 }
 
 func directionFromKey(event *tcell.EventKey) (Direction, bool) {

@@ -26,13 +26,14 @@ const (
 )
 
 type SnakeGame struct {
-	Width  int
-	Height int
-	Snake  []Point
-	Food   Point
-	Dir    Direction
-	Score  int
-	Over   bool
+	Width     int
+	Height    int
+	Snake     []Point
+	Food      Point
+	Dir       Direction
+	Score     int
+	FoodScore int
+	Over      bool
 
 	randomInt func(int) int
 }
@@ -53,6 +54,7 @@ func NewSnakeGame(width int, height int, randomInt func(int) int) *SnakeGame {
 		Height:    height,
 		Snake:     []Point{{X: width / 2, Y: height / 2}},
 		Dir:       DirectionRight,
+		FoodScore: 1,
 		Food:      Point{X: -1, Y: -1},
 		randomInt: randomInt,
 	}
@@ -95,7 +97,11 @@ func (g *SnakeGame) Step() StepResult {
 
 	g.Snake = append([]Point{next}, g.Snake...)
 	if willGrow {
-		g.Score++
+		foodScore := g.FoodScore
+		if foodScore < 1 {
+			foodScore = 1
+		}
+		g.Score += foodScore
 		g.PlaceFood()
 		return StepAteFood
 	}

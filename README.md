@@ -23,6 +23,11 @@ The upper pane shows visible progress. Move with the arrow keys or `WASD`, press
 `R` to restart after a round over, use `F12` to switch to the command pane, and
 return to your shell with `F10`.
 
+Snake uses Command Heat: as the wrapped command keeps running, the Heat level
+rises, Snake moves faster, and food awards a higher score multiplier. Heat is
+capped so long commands stay playable, and restarted rounds ramp back up instead
+of jumping straight to maximum speed.
+
 `F10` detaches from tmux and keeps the Sidequest session listed for later attach.
 `Q` leaves the game pane; once the command is finished, Sidequest can clean up
 the session.
