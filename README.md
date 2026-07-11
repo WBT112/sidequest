@@ -10,6 +10,11 @@ sidequest -- ansible-playbook upgrade.yml
 
 Sidequest runs your command in one terminal pane and opens a small retro game in another. When the command finishes, the game stops and Sidequest shows the exit status and runtime.
 
+Requirements
+
+Sidequest currently targets Linux terminals with tmux available in PATH.
+The initial layout requires an interactive terminal of at least 80 columns by 24 rows.
+
 Goals
 
 Sidequest should be:

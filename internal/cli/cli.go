@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/WBT112/sidequest/internal/preflight"
 )
 
 const usage = `Usage:
@@ -36,9 +38,10 @@ type Result struct {
 }
 
 type App struct {
-	Out     io.Writer
-	Err     io.Writer
-	Version string
+	Out       io.Writer
+	Err       io.Writer
+	Version   string
+	Preflight func() error
 }
 
 func (a App) Run(args []string) int {
@@ -56,6 +59,11 @@ func (a App) Run(args []string) int {
 		fmt.Fprintf(a.outputWriter(), "sidequest %s\n", a.version())
 		return 0
 	default:
+		if err := a.runPreflight(); err != nil {
+			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+			return 2
+		}
+
 		fmt.Fprintf(
 			a.outputWriter(),
 			"parsed command:\n  executable: %q\n  arguments: %q\n",
@@ -125,4 +133,11 @@ func (a App) version() string {
 		return a.Version
 	}
 	return "dev"
+}
+
+func (a App) runPreflight() error {
+	if a.Preflight != nil {
+		return a.Preflight()
+	}
+	return preflight.Validate(preflight.DefaultEnvironment())
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -84,6 +85,46 @@ func TestRunVersion(t *testing.T) {
 
 	if got, want := out.String(), "sidequest 1.2.3\n"; got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestRunCommandRunsPreflightBeforeReportingCommand(t *testing.T) {
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	app := App{
+		Out: &out,
+		Err: &stderr,
+		Preflight: func() error {
+			return fmt.Errorf("preflight failed")
+		},
+	}
+
+	code := app.Run([]string{"--", "sleep", "1"})
+	if code != 2 {
+		t.Fatalf("Run exit code = %d, want 2", code)
+	}
+
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+	if !strings.Contains(stderr.String(), "preflight failed") {
+		t.Fatalf("stderr = %q, want preflight error", stderr.String())
+	}
+}
+
+func TestRunHelpSkipsPreflight(t *testing.T) {
+	var out bytes.Buffer
+	app := App{
+		Out: &out,
+		Preflight: func() error {
+			t.Fatal("preflight should not run for help")
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"--help"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
 	}
 }
 
