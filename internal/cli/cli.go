@@ -5,12 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/WBT112/sidequest/internal/preflight"
 	"github.com/WBT112/sidequest/internal/session"
+	"github.com/WBT112/sidequest/internal/tmux"
 )
+
+const commandRunnerMode = "__sidequest-command-runner"
 
 const usage = `Usage:
   sidequest [options] -- <command> [arguments...]
@@ -46,10 +52,21 @@ type App struct {
 	Version        string
 	Preflight      func() error
 	CreateSession  func() (session.Session, error)
-	HandoffCommand func(session.Session, session.Command) (session.Command, error)
+	RunLayout      func(session.Session, session.Command) error
+	ReceiveCommand func(context.Context, string) (session.Command, error)
+	ExecCommand    func(session.Command) error
+	Now            func() time.Time
 }
 
 func (a App) Run(args []string) int {
+	if len(args) == 2 && args[0] == commandRunnerMode {
+		if err := a.runCommandRunner(args[1]); err != nil {
+			fmt.Fprintf(a.errorWriter(), "sidequest command runner: %v\n", err)
+			return 127
+		}
+		return 0
+	}
+
 	result, err := Parse(args)
 	if err != nil {
 		fmt.Fprintf(a.errorWriter(), "sidequest: %v\n\n%s", err, usage)
@@ -78,19 +95,12 @@ func (a App) Run(args []string) int {
 			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
 			return 2
 		}
-		receivedCommand, err := a.handoffCommand(runtimeSession, command)
-		if err != nil {
+
+		if err := a.runLayout(runtimeSession, command); err != nil {
 			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
 			return 2
 		}
 
-		fmt.Fprintf(
-			a.outputWriter(),
-			"created session: %s\ncommand handoff:\n  executable: %q\n  arguments: %q\n",
-			runtimeSession.ID,
-			receivedCommand.Executable,
-			receivedCommand.Arguments,
-		)
 		return 0
 	}
 }
@@ -170,32 +180,73 @@ func (a App) createSession() (session.Session, error) {
 	return session.DefaultManager().Create()
 }
 
-func (a App) handoffCommand(runtimeSession session.Session, command session.Command) (session.Command, error) {
-	if a.HandoffCommand != nil {
-		return a.HandoffCommand(runtimeSession, command)
+func (a App) runLayout(runtimeSession session.Session, command session.Command) error {
+	if a.RunLayout != nil {
+		return a.RunLayout(runtimeSession, command)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	listener, err := session.ListenCommand(runtimeSession)
 	if err != nil {
-		return session.Command{}, err
+		return err
 	}
 	defer listener.Close()
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- session.SendCommand(ctx, runtimeSession.SocketPath, command)
-	}()
-
-	receivedCommand, err := listener.Receive(ctx)
+	executable, err := os.Executable()
 	if err != nil {
-		return session.Command{}, err
-	}
-	if err := <-errc; err != nil {
-		return session.Command{}, err
+		return fmt.Errorf("resolve sidequest executable: %w", err)
 	}
 
-	return receivedCommand, nil
+	layout := tmux.Layout{}
+	info, err := layout.Start(runtimeSession, []string{executable, commandRunnerMode, runtimeSession.SocketPath})
+	if err != nil {
+		return err
+	}
+	if err := session.UpdateState(runtimeSession, a.now(), func(state *session.State) {
+		state.TmuxSocket = info.SocketName
+	}); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := listener.Serve(ctx, command); err != nil {
+		return err
+	}
+
+	return layout.Attach(info)
+}
+
+func (a App) runCommandRunner(socketPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	receive := a.ReceiveCommand
+	if receive == nil {
+		receive = session.ReceiveCommand
+	}
+	command, err := receive(ctx, socketPath)
+	if err != nil {
+		return err
+	}
+
+	execute := a.ExecCommand
+	if execute == nil {
+		execute = execCommand
+	}
+	return execute(command)
+}
+
+func execCommand(command session.Command) error {
+	path, err := exec.LookPath(command.Executable)
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(path, append([]string{command.Executable}, command.Arguments...), os.Environ())
+}
+
+func (a App) now() time.Time {
+	if a.Now != nil {
+		return a.Now()
+	}
+	return time.Now()
 }

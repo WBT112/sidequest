@@ -78,14 +78,15 @@ func TestCommandIsNeverWrittenToRuntimeFiles(t *testing.T) {
 
 	errc := make(chan error, 1)
 	go func() {
-		errc <- SendCommand(ctx, session.SocketPath, command)
+		_, err := ReceiveCommand(ctx, session.SocketPath)
+		errc <- err
 	}()
 
-	if _, err := listener.Receive(ctx); err != nil {
-		t.Fatalf("Receive returned error: %v", err)
+	if err := listener.Serve(ctx, command); err != nil {
+		t.Fatalf("Serve returned error: %v", err)
 	}
 	if err := <-errc; err != nil {
-		t.Fatalf("SendCommand returned error: %v", err)
+		t.Fatalf("ReceiveCommand returned error: %v", err)
 	}
 
 	assertRuntimeFilesDoNotContain(t, session.Dir, "printf-secret", "token=secret", "*.go")
@@ -112,17 +113,22 @@ func TestCommandHandoffPreservesArgumentArray(t *testing.T) {
 	defer cancel()
 
 	errc := make(chan error, 1)
+	gotc := make(chan Command, 1)
 	go func() {
-		errc <- SendCommand(ctx, session.SocketPath, want)
+		got, err := ReceiveCommand(ctx, session.SocketPath)
+		if err == nil {
+			gotc <- got
+		}
+		errc <- err
 	}()
 
-	got, err := listener.Receive(ctx)
-	if err != nil {
-		t.Fatalf("Receive returned error: %v", err)
+	if err := listener.Serve(ctx, want); err != nil {
+		t.Fatalf("Serve returned error: %v", err)
 	}
 	if err := <-errc; err != nil {
-		t.Fatalf("SendCommand returned error: %v", err)
+		t.Fatalf("ReceiveCommand returned error: %v", err)
 	}
+	got := <-gotc
 
 	if got.Executable != want.Executable {
 		t.Fatalf("Executable = %q, want %q", got.Executable, want.Executable)
@@ -192,6 +198,32 @@ func TestCleanupRemovesSessionRuntimeDirectory(t *testing.T) {
 	if _, err := os.Stat(session.Dir); !IsNotExist(err) {
 		t.Fatalf("session dir stat error = %v, want not exist", err)
 	}
+}
+
+func TestUpdateStatePersistsTmuxSocketWithoutCommand(t *testing.T) {
+	manager := Manager{BaseDir: filepath.Join(t.TempDir(), "sidequest"), IDGenerator: fixedID("state-update")}
+	session, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	now := time.Date(2026, 7, 11, 11, 0, 0, 0, time.UTC)
+	err = UpdateState(session, now, func(state *State) {
+		state.TmuxSocket = "sidequest-state-update"
+	})
+	if err != nil {
+		t.Fatalf("UpdateState returned error: %v", err)
+	}
+
+	state, err := ReadState(session)
+	if err != nil {
+		t.Fatalf("ReadState returned error: %v", err)
+	}
+	if state.TmuxSocket != "sidequest-state-update" {
+		t.Fatalf("TmuxSocket = %q, want %q", state.TmuxSocket, "sidequest-state-update")
+	}
+
+	assertRuntimeFilesDoNotContain(t, session.Dir, "bash", "sleep 30", "exit 7")
 }
 
 func fixedID(id string) func() (string, error) {

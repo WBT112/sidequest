@@ -41,18 +41,49 @@ func ListenCommand(session Session) (*CommandListener, error) {
 	return &CommandListener{listener: listener, path: session.SocketPath}, nil
 }
 
-func (l *CommandListener) Receive(ctx context.Context) (Command, error) {
+func (l *CommandListener) Serve(ctx context.Context, command Command) error {
+	if command.Executable == "" {
+		return ErrEmptyExecutable
+	}
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := l.listener.SetDeadline(deadline); err != nil {
-			return Command{}, fmt.Errorf("set command socket deadline: %w", err)
+			return fmt.Errorf("set command socket deadline: %w", err)
 		}
 	}
 
 	conn, err := l.listener.AcceptUnix()
 	if err != nil {
-		return Command{}, fmt.Errorf("accept command handoff: %w", err)
+		return fmt.Errorf("accept command handoff: %w", err)
 	}
 	defer conn.Close()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return fmt.Errorf("set command handoff deadline: %w", err)
+		}
+	}
+	if err := json.NewEncoder(conn).Encode(command); err != nil {
+		return fmt.Errorf("encode command handoff: %w", err)
+	}
+
+	return nil
+}
+
+func ReceiveCommand(ctx context.Context, socketPath string) (Command, error) {
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return Command{}, fmt.Errorf("connect to command socket: %w", err)
+	}
+	defer conn.Close()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return Command{}, fmt.Errorf("set command handoff deadline: %w", err)
+		}
+	} else {
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	}
 
 	var command Command
 	if err := json.NewDecoder(conn).Decode(&command); err != nil {
@@ -75,31 +106,4 @@ func (l *CommandListener) Close() error {
 		return listenerErr
 	}
 	return removeErr
-}
-
-func SendCommand(ctx context.Context, socketPath string, command Command) error {
-	if command.Executable == "" {
-		return ErrEmptyExecutable
-	}
-
-	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "unix", socketPath)
-	if err != nil {
-		return fmt.Errorf("connect to command socket: %w", err)
-	}
-	defer conn.Close()
-
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			return fmt.Errorf("set command handoff deadline: %w", err)
-		}
-	} else {
-		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	}
-
-	if err := json.NewEncoder(conn).Encode(command); err != nil {
-		return fmt.Errorf("encode command handoff: %w", err)
-	}
-
-	return nil
 }

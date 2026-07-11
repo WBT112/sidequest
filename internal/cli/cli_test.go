@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -141,8 +142,8 @@ func TestRunHelpSkipsPreflight(t *testing.T) {
 func TestRunCommandCreatesSessionAndHandoffsCommand(t *testing.T) {
 	var out bytes.Buffer
 	runtimeSession := session.Session{ID: "session-1", Dir: "/runtime/session-1"}
-	var handedOffSession session.Session
-	var handedOffCommand session.Command
+	var layoutSession session.Session
+	var layoutCommand session.Command
 
 	app := App{
 		Out:       &out,
@@ -150,10 +151,10 @@ func TestRunCommandCreatesSessionAndHandoffsCommand(t *testing.T) {
 		CreateSession: func() (session.Session, error) {
 			return runtimeSession, nil
 		},
-		HandoffCommand: func(gotSession session.Session, gotCommand session.Command) (session.Command, error) {
-			handedOffSession = gotSession
-			handedOffCommand = gotCommand
-			return gotCommand, nil
+		RunLayout: func(gotSession session.Session, gotCommand session.Command) error {
+			layoutSession = gotSession
+			layoutCommand = gotCommand
+			return nil
 		},
 	}
 
@@ -161,18 +162,45 @@ func TestRunCommandCreatesSessionAndHandoffsCommand(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
-	if handedOffSession.ID != runtimeSession.ID {
-		t.Fatalf("handoff session = %#v, want %#v", handedOffSession, runtimeSession)
+	if layoutSession.ID != runtimeSession.ID {
+		t.Fatalf("layout session = %#v, want %#v", layoutSession, runtimeSession)
 	}
-	if handedOffCommand.Executable != "printf" {
-		t.Fatalf("handoff executable = %q, want %q", handedOffCommand.Executable, "printf")
+	if layoutCommand.Executable != "printf" {
+		t.Fatalf("layout executable = %q, want %q", layoutCommand.Executable, "printf")
 	}
 	wantArgs := []string{"%s\n", "|", ">", "*.go"}
-	if !equalSlices(handedOffCommand.Arguments, wantArgs) {
-		t.Fatalf("handoff args = %#v, want %#v", handedOffCommand.Arguments, wantArgs)
+	if !equalSlices(layoutCommand.Arguments, wantArgs) {
+		t.Fatalf("layout args = %#v, want %#v", layoutCommand.Arguments, wantArgs)
 	}
-	if !strings.Contains(out.String(), "created session: session-1") {
-		t.Fatalf("stdout = %q, want session id", out.String())
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+}
+
+func TestRunCommandRunnerReceivesAndExecsCommand(t *testing.T) {
+	var executed session.Command
+	app := App{
+		ReceiveCommand: func(ctx context.Context, socketPath string) (session.Command, error) {
+			if socketPath != "/tmp/command.sock" {
+				t.Fatalf("socketPath = %q, want %q", socketPath, "/tmp/command.sock")
+			}
+			return session.Command{Executable: "bash", Arguments: []string{"-c", "exit 7"}}, nil
+		},
+		ExecCommand: func(command session.Command) error {
+			executed = command
+			return nil
+		},
+	}
+
+	code := app.Run([]string{commandRunnerMode, "/tmp/command.sock"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if executed.Executable != "bash" {
+		t.Fatalf("executed command = %#v, want bash", executed)
+	}
+	if !equalSlices(executed.Arguments, []string{"-c", "exit 7"}) {
+		t.Fatalf("executed arguments = %#v", executed.Arguments)
 	}
 }
 

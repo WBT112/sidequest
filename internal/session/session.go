@@ -148,6 +148,32 @@ func WriteState(session Session, state State) error {
 	return nil
 }
 
+func ReadState(session Session) (State, error) {
+	data, err := os.ReadFile(session.StatePath)
+	if err != nil {
+		return State{}, fmt.Errorf("read session state: %w", err)
+	}
+
+	var state State
+	if err := json.Unmarshal(data, &state); err != nil {
+		return State{}, fmt.Errorf("decode session state: %w", err)
+	}
+
+	return state, nil
+}
+
+func UpdateState(session Session, now time.Time, update func(*State)) error {
+	state, err := ReadState(session)
+	if err != nil {
+		return err
+	}
+
+	update(&state)
+	state.UpdatedAt = now.UTC()
+
+	return WriteState(session, state)
+}
+
 func Cleanup(session Session) error {
 	if session.Dir == "" {
 		return nil
