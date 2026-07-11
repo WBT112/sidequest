@@ -3,10 +3,10 @@ Play a tiny terminal game while waiting for a long-running command to finish.
 
 Your computer has a task. So do you.
 
-sidequest sudo apt upgrade
-sidequest docker build .
-sidequest cargo build --release
-sidequest ansible-playbook upgrade.yml
+sidequest -- sudo apt upgrade
+sidequest -- docker build .
+sidequest -- cargo build --release
+sidequest -- ansible-playbook upgrade.yml
 
 Sidequest runs your command in one terminal pane and opens a small retro game in another. When the command finishes, the game stops and Sidequest shows the exit status and runtime.
 
