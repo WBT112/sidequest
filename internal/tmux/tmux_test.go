@@ -95,6 +95,22 @@ func TestAttachUsesIsolatedServer(t *testing.T) {
 	}
 }
 
+func TestDefaultAttachRunnerUsesTerminalStdio(t *testing.T) {
+	runner := attachRunner()
+
+	if runner.Stdin == nil || runner.Stdout == nil || runner.Stderr == nil {
+		t.Fatalf("attachRunner = %#v, want terminal stdio configured", runner)
+	}
+}
+
+func TestQuietRunnerDoesNotUseTerminalStdio(t *testing.T) {
+	runner := quietRunner()
+
+	if runner.Stdin != nil || runner.Stdout != nil || runner.Stderr != nil {
+		t.Fatalf("quietRunner = %#v, want no terminal stdio", runner)
+	}
+}
+
 func TestCloseKillsOnlyIsolatedSession(t *testing.T) {
 	runner := &recordingRunner{}
 	layout := Layout{CommandRunner: runner}
