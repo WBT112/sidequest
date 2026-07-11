@@ -12,6 +12,7 @@ import (
 	"github.com/WBT112/sidequest/internal/commandexec"
 	"github.com/WBT112/sidequest/internal/game"
 	"github.com/WBT112/sidequest/internal/preflight"
+	"github.com/WBT112/sidequest/internal/runhistory"
 	"github.com/WBT112/sidequest/internal/session"
 	"github.com/WBT112/sidequest/internal/tmux"
 )
@@ -22,6 +23,10 @@ const gameRunnerMode = "__sidequest-game"
 const usage = `Usage:
   sidequest list
   sidequest attach <session-id>
+  sidequest runs
+  sidequest show last|<run-id>
+  sidequest output last|<run-id>
+  sidequest purge <run-id>
   sidequest [options] -- <command> [arguments...]
 
 Options:
@@ -59,7 +64,15 @@ type App struct {
 	AttachSession  func(string) error
 	TmuxHasSession func(tmux.Info) bool
 	CloseTmux      func(tmux.Info) error
+	CloseGamePane  func(tmux.Info) error
+	DetachClients  func(tmux.Info) error
+	CapturePane    func(tmux.Info) (string, bool, error)
 	CleanupSession func(session.Session) error
+	StoreRun       func(session.Record, string, bool) (runhistory.Run, error)
+	ListRuns       func() ([]runhistory.Run, error)
+	FindRun        func(string) (runhistory.Run, error)
+	OutputRun      func(string) error
+	PurgeRun       func(string) error
 	RunLayout      func(session.Session, session.Command) error
 	ReceiveCommand func(context.Context, string) (session.Command, error)
 	ExecCommand    func(session.Session, session.Command) error
@@ -100,6 +113,46 @@ func (a App) Run(args []string) int {
 				return 2
 			}
 			if err := a.runAttach(args[1]); err != nil {
+				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+				return 2
+			}
+			return 0
+		case "runs":
+			if len(args) != 1 {
+				fmt.Fprintf(a.errorWriter(), "sidequest: runs does not accept arguments\n\n%s", usage)
+				return 2
+			}
+			if err := a.runRuns(); err != nil {
+				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+				return 2
+			}
+			return 0
+		case "show":
+			if len(args) != 2 {
+				fmt.Fprintf(a.errorWriter(), "sidequest: show requires last or a run id\n\n%s", usage)
+				return 2
+			}
+			if err := a.runShow(args[1]); err != nil {
+				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+				return 2
+			}
+			return 0
+		case "output":
+			if len(args) != 2 {
+				fmt.Fprintf(a.errorWriter(), "sidequest: output requires last or a run id\n\n%s", usage)
+				return 2
+			}
+			if err := a.runOutput(args[1]); err != nil {
+				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+				return 2
+			}
+			return 0
+		case "purge":
+			if len(args) != 2 {
+				fmt.Fprintf(a.errorWriter(), "sidequest: purge requires a run id\n\n%s", usage)
+				return 2
+			}
+			if err := a.runPurge(args[1]); err != nil {
 				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
 				return 2
 			}
@@ -266,6 +319,59 @@ func (a App) runList() error {
 	return nil
 }
 
+func (a App) runRuns() error {
+	runs, err := a.listRuns()
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(a.outputWriter(), "ID             FINISHED             EXIT   DURATION")
+	for _, run := range runs {
+		fmt.Fprintf(
+			a.outputWriter(),
+			"%-14s %-20s %-6s %s\n",
+			run.Result.ID,
+			run.Result.FinishedAt.Local().Format("2006-01-02 15:04:05"),
+			runhistory.FormatExitCode(run.Result.ExitCode),
+			runhistory.FormatDuration(run.Result.DurationMillis),
+		)
+	}
+	return nil
+}
+
+func (a App) runShow(id string) error {
+	run, err := a.findRun(id)
+	if err != nil {
+		return err
+	}
+	exitCode := runhistory.FormatExitCode(run.Result.ExitCode)
+	fmt.Fprintf(a.outputWriter(), "ID: %s\n", run.Result.ID)
+	fmt.Fprintf(a.outputWriter(), "Started: %s\n", run.Result.StartedAt.Local().Format(time.RFC3339))
+	fmt.Fprintf(a.outputWriter(), "Finished: %s\n", run.Result.FinishedAt.Local().Format(time.RFC3339))
+	fmt.Fprintf(a.outputWriter(), "Duration: %s\n", runhistory.FormatDuration(run.Result.DurationMillis))
+	fmt.Fprintf(a.outputWriter(), "Exit code: %s\n", exitCode)
+	fmt.Fprintf(a.outputWriter(), "Termination: %s\n", run.Result.Termination)
+	fmt.Fprintf(a.outputWriter(), "Output truncated: %t\n", run.Result.OutputTruncated)
+	fmt.Fprintf(a.outputWriter(), "Output: %s\n", run.OutputPath)
+	return nil
+}
+
+func (a App) runOutput(id string) error {
+	if a.OutputRun != nil {
+		return a.OutputRun(id)
+	}
+	manager := runhistory.DefaultManager()
+	manager.Out = a.outputWriter()
+	return manager.Output(id)
+}
+
+func (a App) runPurge(id string) error {
+	if a.PurgeRun != nil {
+		return a.PurgeRun(id)
+	}
+	return runhistory.DefaultManager().Purge(id)
+}
+
 func (a App) runAttach(id string) error {
 	if err := a.runPreflight(); err != nil {
 		return err
@@ -386,6 +492,30 @@ func (a App) runGameShell(statePath string) error {
 		ReadState: func() (session.State, error) {
 			return session.ReadState(runtimeSession)
 		},
+		OnQuitActive: func() error {
+			state, err := session.ReadState(runtimeSession)
+			if err != nil {
+				return err
+			}
+			record := session.Record{Session: runtimeSession, State: state}
+			info, owned := ownedInfoFromRecord(record)
+			if !owned {
+				return nil
+			}
+			return a.closeGamePane(info)
+		},
+		OnQuitTerminal: func() error {
+			state, err := session.ReadState(runtimeSession)
+			if err != nil {
+				return err
+			}
+			record := session.Record{Session: runtimeSession, State: state}
+			info, owned := ownedInfoFromRecord(record)
+			if !owned {
+				return nil
+			}
+			return a.detachClients(info)
+		},
 	}
 	return shell.Run(context.Background())
 }
@@ -417,11 +547,42 @@ func (a App) cleanupClosedSession(record session.Record) error {
 	}
 
 	if info, ok := ownedInfoFromRecord(record); ok {
+		if a.tmuxHasSession(info) {
+			output, truncated, err := a.captureCommandPane(info)
+			if err != nil {
+				return err
+			}
+			run, err := a.storeRun(record, output, truncated)
+			if err != nil {
+				return err
+			}
+			a.printStoredRun(run)
+		}
 		if err := a.closeTmux(info); err != nil {
 			return err
 		}
 	}
 	return a.cleanupSession(record.Session)
+}
+
+func (a App) printStoredRun(run runhistory.Run) {
+	fmt.Fprintf(a.outputWriter(), "Saved output: %s\n", run.OutputPath)
+	fmt.Fprintf(a.outputWriter(), "View it with: sidequest output %s\n", run.Result.ID)
+	fmt.Fprintf(a.outputWriter(), "Metadata: sidequest show %s\n", run.Result.ID)
+}
+
+func (a App) captureCommandPane(info tmux.Info) (string, bool, error) {
+	if a.CapturePane != nil {
+		return a.CapturePane(info)
+	}
+	return tmux.Layout{}.CaptureCommandPane(info)
+}
+
+func (a App) storeRun(record session.Record, output string, truncated bool) (runhistory.Run, error) {
+	if a.StoreRun != nil {
+		return a.StoreRun(record, output, truncated)
+	}
+	return runhistory.DefaultManager().Store(record, output, truncated)
 }
 
 func (a App) closeTmux(info tmux.Info) error {
@@ -431,11 +592,39 @@ func (a App) closeTmux(info tmux.Info) error {
 	return tmux.Layout{}.Close(info)
 }
 
+func (a App) closeGamePane(info tmux.Info) error {
+	if a.CloseGamePane != nil {
+		return a.CloseGamePane(info)
+	}
+	return tmux.Layout{}.CloseGamePane(info)
+}
+
+func (a App) detachClients(info tmux.Info) error {
+	if a.DetachClients != nil {
+		return a.DetachClients(info)
+	}
+	return tmux.Layout{}.DetachClients(info)
+}
+
 func (a App) cleanupSession(runtimeSession session.Session) error {
 	if a.CleanupSession != nil {
 		return a.CleanupSession(runtimeSession)
 	}
 	return session.Cleanup(runtimeSession)
+}
+
+func (a App) listRuns() ([]runhistory.Run, error) {
+	if a.ListRuns != nil {
+		return a.ListRuns()
+	}
+	return runhistory.DefaultManager().List()
+}
+
+func (a App) findRun(id string) (runhistory.Run, error) {
+	if a.FindRun != nil {
+		return a.FindRun(id)
+	}
+	return runhistory.DefaultManager().Find(id)
 }
 
 func infoFromRecord(record session.Record) tmux.Info {

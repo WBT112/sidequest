@@ -4,9 +4,9 @@ Play a tiny terminal game while waiting for a long-running command to finish.
 Your computer has a task. So do you.
 
 Sidequest turns terminal waiting time into a small playable break. Your command
-keeps running in the main pane, while Snake starts in the lower pane when you
-switch down and make the first move. When the command finishes, the game freezes
-on your final score and Sidequest shows the command result.
+keeps running in the main pane, while Snake is focused in the lower pane and
+starts on your first move. When the command finishes, the game freezes on your
+final score and Sidequest shows the command result.
 
 sidequest -- sudo apt upgrade
 sidequest -- docker build .
@@ -19,13 +19,30 @@ Try it with a harmless demo workload:
 sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i"; sleep 1; done'
 ```
 
-The upper pane shows visible progress. Switch to the lower pane with `F12`, move
-with the arrow keys or `WASD`, press `R` to restart after a round over, and
+The upper pane shows visible progress. Move with the arrow keys or `WASD`, press
+`R` to restart after a round over, use `F12` to switch to the command pane, and
 return to your shell with `F10`.
 
 `F10` detaches from tmux and keeps the Sidequest session listed for later attach.
 `Q` leaves the game pane; once the command is finished, Sidequest can clean up
 the session.
+
+Finished runs keep the visible command-pane output locally so you can inspect it
+after tmux is gone. After cleanup, Sidequest prints the saved output path and the
+matching `sidequest output <run-id>` command in your shell:
+
+```bash
+sidequest runs
+sidequest show last
+sidequest output last
+sidequest purge <run-id>
+```
+
+Run history is stored under
+`${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/`. It only stores visible
+pane output plus result metadata, not the command or argument list. Terminal
+output can still contain sensitive data such as tokens, environment values, file
+contents or application data.
 
 Sidequest is meant for the boring middle of long commands: builds, upgrades,
 deployments and scripts that need to stay visible but do not need your constant

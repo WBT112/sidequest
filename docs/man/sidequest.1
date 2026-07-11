@@ -12,11 +12,28 @@ sidequest \- play a tiny terminal game while waiting for a command
 .PP
 .B sidequest attach
 .I session-id
+.PP
+.B sidequest runs
+.PP
+.B sidequest show
+.I last|run-id
+.PP
+.B sidequest output
+.I last|run-id
+.PP
+.B sidequest purge
+.I run-id
 .SH DESCRIPTION
 .B sidequest
 runs a command in one tmux pane and opens a small terminal game in another.
-When the command finishes, the game freezes and Sidequest shows the command
-state, exit code or signal, runtime, and final score.
+The game pane is focused first and starts on the first move. When the command
+finishes, the game freezes and Sidequest shows the command state, exit code or
+signal, runtime, and final score.
+.PP
+Finished runs keep visible command-pane output locally under
+.IR "${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/" .
+Sidequest stores result metadata and pane output, but not the command or
+argument list.
 .PP
 Commands are executed directly. Arguments after
 .B --
@@ -35,10 +52,24 @@ List Sidequest runtime sessions.
 .TP
 .BI attach " session-id"
 Attach to an existing Sidequest tmux session.
+.TP
+.B runs
+List recent stored runs.
+.TP
+.BI show " last|run-id"
+Show stored result metadata and the output path.
+.TP
+.BI output " last|run-id"
+Open stored output with
+.BR $PAGER ,
+or print it to standard output when no pager is configured.
+.TP
+.BI purge " run-id"
+Remove one stored Sidequest run after validating the local run directory.
 .SH CONTROLS
 .TP
 .B F12
-Switch between the command pane and the game pane.
+Switch between the game pane and the command pane.
 .TP
 .B F10
 Detach from the Sidequest tmux session and return to the shell. The session stays
@@ -70,6 +101,10 @@ Installed license and README documentation.
 .TP
 .I /usr/share/man/man1/sidequest.1
 Installed manual page.
+.TP
+.I ${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/
+Local stored run history. Captured terminal output may contain sensitive data
+such as tokens, environment values, file contents or application data.
 .SH EXIT STATUS
 Sidequest returns zero when setup and attach handling succeed. The command
 runner records the child command result in Sidequest session metadata.

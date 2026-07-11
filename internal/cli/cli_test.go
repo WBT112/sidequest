@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WBT112/sidequest/internal/runhistory"
 	"github.com/WBT112/sidequest/internal/session"
 	"github.com/WBT112/sidequest/internal/tmux"
 )
@@ -361,6 +362,111 @@ func TestRunListDoesNotInspectUnownedTmuxMetadata(t *testing.T) {
 	}
 }
 
+func TestRunRunsShowsStoredRunMetadataWithoutCommandArguments(t *testing.T) {
+	var out bytes.Buffer
+	exitCode := 0
+	finished := time.Date(2026, 7, 11, 18, 43, 15, 0, time.Local)
+	app := App{
+		Out: &out,
+		ListRuns: func() ([]runhistory.Run, error) {
+			return []runhistory.Run{
+				{
+					Result: runhistory.Result{
+						ID:             "brave-otter",
+						FinishedAt:     finished,
+						DurationMillis: 275000,
+						ExitCode:       &exitCode,
+						Termination:    session.StatusCompleted,
+					},
+					OutputPath: "/state/sidequest/runs/brave-otter/output.txt",
+				},
+			}, nil
+		},
+	}
+
+	code := app.Run([]string{"runs"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	output := out.String()
+	for _, want := range []string{"ID", "FINISHED", "EXIT", "DURATION", "brave-otter", "0", "00:04:35"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("runs output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{"bash", "secret", "sudo apt"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("runs output exposes command data %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestRunShowDisplaysMetadataAndOutputPath(t *testing.T) {
+	var out bytes.Buffer
+	exitCode := 1
+	started := time.Date(2026, 7, 11, 18, 38, 40, 0, time.Local)
+	finished := time.Date(2026, 7, 11, 18, 43, 15, 0, time.Local)
+	app := App{
+		Out: &out,
+		FindRun: func(id string) (runhistory.Run, error) {
+			if id != "last" {
+				t.Fatalf("id = %q, want last", id)
+			}
+			return runhistory.Run{
+				Result: runhistory.Result{
+					ID:              "brave-otter",
+					StartedAt:       started,
+					FinishedAt:      finished,
+					DurationMillis:  275000,
+					ExitCode:        &exitCode,
+					Termination:     session.StatusFailed,
+					OutputTruncated: true,
+				},
+				OutputPath: "/state/sidequest/runs/brave-otter/output.txt",
+			}, nil
+		},
+	}
+
+	code := app.Run([]string{"show", "last"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	output := out.String()
+	for _, want := range []string{"ID: brave-otter", "Exit code: 1", "Termination: failed", "Output truncated: true", "Output: /state/sidequest/runs/brave-otter/output.txt"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("show output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunOutputAndPurgeDispatchToHistory(t *testing.T) {
+	outputID := ""
+	purgeID := ""
+	app := App{
+		OutputRun: func(id string) error {
+			outputID = id
+			return nil
+		},
+		PurgeRun: func(id string) error {
+			purgeID = id
+			return nil
+		},
+	}
+
+	if code := app.Run([]string{"output", "last"}); code != 0 {
+		t.Fatalf("output exit code = %d, want 0", code)
+	}
+	if code := app.Run([]string{"purge", "brave-otter"}); code != 0 {
+		t.Fatalf("purge exit code = %d, want 0", code)
+	}
+	if outputID != "last" {
+		t.Fatalf("outputID = %q, want last", outputID)
+	}
+	if purgeID != "brave-otter" {
+		t.Fatalf("purgeID = %q, want brave-otter", purgeID)
+	}
+}
+
 func TestRunAttachValidatesPreflightFirst(t *testing.T) {
 	var stderr bytes.Buffer
 	attachCalled := false
@@ -419,6 +525,7 @@ func TestCleanupClosedSessionRemovesTerminalOwnedSession(t *testing.T) {
 	closed := ""
 	cleaned := ""
 	app := App{
+		TmuxHasSession: func(tmux.Info) bool { return false },
 		CloseTmux: func(info tmux.Info) error {
 			closed = info.SocketName
 			return nil
@@ -440,12 +547,77 @@ func TestCleanupClosedSessionRemovesTerminalOwnedSession(t *testing.T) {
 	}
 }
 
+func TestCleanupClosedSessionCapturesAndStoresBeforeClosingTmux(t *testing.T) {
+	exitCode := 0
+	record := session.Record{
+		Session: session.Session{ID: "done", Dir: "/tmp/sidequest-1000/done"},
+		State: session.State{
+			Status:     session.StatusCompleted,
+			ExitCode:   &exitCode,
+			TmuxSocket: "sidequest-done",
+		},
+	}
+	var order []string
+	var out bytes.Buffer
+	app := App{
+		Out:            &out,
+		TmuxHasSession: func(tmux.Info) bool { return true },
+		CapturePane: func(info tmux.Info) (string, bool, error) {
+			order = append(order, "capture")
+			return "visible output\n", true, nil
+		},
+		StoreRun: func(got session.Record, output string, truncated bool) (runhistory.Run, error) {
+			order = append(order, "store")
+			if got.Session.ID != "done" || output != "visible output\n" || !truncated {
+				t.Fatalf("stored = %#v output=%q truncated=%t", got, output, truncated)
+			}
+			return runhistory.Run{
+				Result:     runhistory.Result{ID: "done"},
+				OutputPath: "/state/sidequest/runs/done/output.txt",
+			}, nil
+		},
+		CloseTmux: func(tmux.Info) error {
+			order = append(order, "close")
+			return nil
+		},
+		CleanupSession: func(session.Session) error {
+			order = append(order, "cleanup")
+			return nil
+		},
+	}
+
+	if err := app.cleanupClosedSession(record); err != nil {
+		t.Fatalf("cleanupClosedSession returned error: %v", err)
+	}
+	if got, want := strings.Join(order, ","), "capture,store,close,cleanup"; got != want {
+		t.Fatalf("order = %q, want %q", got, want)
+	}
+	output := out.String()
+	for _, want := range []string{
+		"Saved output: /state/sidequest/runs/done/output.txt",
+		"View it with: sidequest output done",
+		"Metadata: sidequest show done",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("cleanup output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestCleanupClosedSessionPreservesRunningSession(t *testing.T) {
 	called := false
 	app := App{
 		CloseTmux: func(tmux.Info) error {
 			called = true
 			return nil
+		},
+		CapturePane: func(tmux.Info) (string, bool, error) {
+			called = true
+			return "", false, nil
+		},
+		StoreRun: func(session.Record, string, bool) (runhistory.Run, error) {
+			called = true
+			return runhistory.Run{}, nil
 		},
 		CleanupSession: func(session.Session) error {
 			called = true

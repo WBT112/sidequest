@@ -13,6 +13,10 @@ type Runner interface {
 	Run(name string, args ...string) error
 }
 
+type OutputRunner interface {
+	Output(name string, args ...string) ([]byte, error)
+}
+
 type ExecRunner struct {
 	Stdin  *os.File
 	Stdout *os.File
@@ -28,6 +32,8 @@ type Info struct {
 	SocketName  string
 	SessionName string
 }
+
+const commandPaneHistoryLimit = 100000
 
 func (l Layout) Start(runtimeSession session.Session, commandRunner []string, gameRunner []string) (Info, error) {
 	if len(commandRunner) == 0 {
@@ -68,6 +74,9 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("set-option", "-t", info.SessionName, "status", "off"); err != nil {
 		return cleanup(fmt.Errorf("disable tmux status bar: %w", err))
 	}
+	if err := run("set-option", "-t", info.SessionName, "history-limit", fmt.Sprintf("%d", commandPaneHistoryLimit)); err != nil {
+		return cleanup(fmt.Errorf("set command pane history limit: %w", err))
+	}
 	if err := run("set-option", "-t", info.SessionName, "pane-border-status", "top"); err != nil {
 		return cleanup(fmt.Errorf("enable pane titles: %w", err))
 	}
@@ -92,8 +101,8 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("bind-key", "-n", "F10", "detach-client"); err != nil {
 		return cleanup(fmt.Errorf("bind F10 detach: %w", err))
 	}
-	if err := run("select-pane", "-t", info.SessionName+":0.0"); err != nil {
-		return cleanup(fmt.Errorf("focus command pane: %w", err))
+	if err := run("select-pane", "-t", info.SessionName+":0.1"); err != nil {
+		return cleanup(fmt.Errorf("focus game pane: %w", err))
 	}
 
 	return info, nil
@@ -133,6 +142,75 @@ func (l Layout) Close(info Info) error {
 	return nil
 }
 
+func (l Layout) CloseGamePane(info Info) error {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = quietRunner()
+	}
+
+	if err := runner.Run(tmuxPath, "-f", "/dev/null", "-L", info.SocketName, "select-pane", "-t", info.SessionName+":0.0"); err != nil {
+		return fmt.Errorf("focus command pane: %w", err)
+	}
+	if err := runner.Run(tmuxPath, "-f", "/dev/null", "-L", info.SocketName, "kill-pane", "-t", info.SessionName+":0.1"); err != nil {
+		return fmt.Errorf("close game pane: %w", err)
+	}
+
+	return nil
+}
+
+func (l Layout) DetachClients(info Info) error {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = quietRunner()
+	}
+
+	if err := runner.Run(tmuxPath, "-f", "/dev/null", "-L", info.SocketName, "detach-client", "-s", info.SessionName); err != nil {
+		return fmt.Errorf("detach tmux clients: %w", err)
+	}
+
+	return nil
+}
+
+func (l Layout) CaptureCommandPane(info Info) (string, bool, error) {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = quietRunner()
+	}
+	outputRunner, ok := runner.(OutputRunner)
+	if !ok {
+		return "", false, fmt.Errorf("tmux runner cannot capture output")
+	}
+
+	output, err := outputRunner.Output(
+		tmuxPath,
+		"-f", "/dev/null",
+		"-L", info.SocketName,
+		"capture-pane",
+		"-p",
+		"-J",
+		"-S", fmt.Sprintf("-%d", commandPaneHistoryLimit),
+		"-t", info.SessionName+":0.0",
+	)
+	if err != nil {
+		return "", false, fmt.Errorf("capture command pane: %w", err)
+	}
+	text := string(output)
+	truncated := strings.Count(text, "\n") >= commandPaneHistoryLimit
+	return text, truncated, nil
+}
+
 func (l Layout) HasSession(info Info) bool {
 	tmuxPath := l.TmuxPath
 	if tmuxPath == "" {
@@ -153,6 +231,13 @@ func (r ExecRunner) Run(name string, args ...string) error {
 	command.Stdout = r.Stdout
 	command.Stderr = r.Stderr
 	return command.Run()
+}
+
+func (r ExecRunner) Output(name string, args ...string) ([]byte, error) {
+	command := exec.Command(name, args...)
+	command.Stdin = r.Stdin
+	command.Stderr = r.Stderr
+	return command.Output()
 }
 
 func attachRunner() ExecRunner {

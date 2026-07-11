@@ -68,6 +68,78 @@ func TestRunTogglesPause(t *testing.T) {
 	}
 }
 
+func TestRunCallsActiveQuitHookForRunningCommand(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(40, 10)
+	called := false
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		OnQuitActive: func() error {
+			called = true
+			return nil
+		},
+		PollInterval: time.Hour,
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "F10 detach/list")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("OnQuitActive was not called")
+	}
+}
+
+func TestRunCallsTerminalQuitHookForFinishedCommand(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(40, 10)
+	activeCalled := false
+	terminalCalled := false
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusCompleted}, nil
+		},
+		OnQuitActive: func() error {
+			activeCalled = true
+			return nil
+		},
+		OnQuitTerminal: func() error {
+			terminalCalled = true
+			return nil
+		},
+		PollInterval: time.Hour,
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Q exit/cleanup")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !terminalCalled {
+		t.Fatal("OnQuitTerminal was not called")
+	}
+	if activeCalled {
+		t.Fatal("OnQuitActive was called for terminal state")
+	}
+}
+
 func TestRunWaitsForFirstMoveBeforeStartingSnake(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(5, 7)
@@ -133,6 +205,36 @@ func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
 	}
 }
 
+func TestRunShowsCenteredResultPanelAfterRoundOver(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.SetSize(32, 12)
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: 10 * time.Millisecond,
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	waitForRenderedText(t, screen, "GAME OVER")
+	waitForRenderedText(t, screen, "Final score: 0")
+	waitForRenderedText(t, screen, "R restart")
+
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
 func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(70, 12)
@@ -161,6 +263,8 @@ func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 	}()
 
 	waitForRenderedText(t, screen, "Command finished. Q exit/cleanup")
+	waitForRenderedText(t, screen, "RUN FINISHED")
+	waitForRenderedText(t, screen, "Final score: 0")
 	waitForRenderedText(t, screen, "Exit code: 0")
 	waitForRenderedText(t, screen, "Runtime: 00:00:03")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
@@ -193,6 +297,45 @@ func TestRunHandlesResize(t *testing.T) {
 	waitForRenderedText(t, screen, "Command state: running")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
 
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
+func TestRunDrawsColoredPlayfieldWithThickWalls(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.SetSize(40, 12)
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: time.Hour,
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	topWall, _, topStyle, _ := screen.GetContent(20, 4)
+	sideWall, _, _, _ := screen.GetContent(0, 6)
+	inside, _, insideStyle, _ := screen.GetContent(20, 6)
+	_, wallBackground, _ := topStyle.Decompose()
+	_, insideBackground, _ := insideStyle.Decompose()
+	if topWall != tcell.RuneBlock || sideWall != tcell.RuneBlock {
+		t.Fatalf("wall runes = %q %q, want block walls", topWall, sideWall)
+	}
+	if wallBackground != tcell.ColorTeal {
+		t.Fatalf("wall background = %v, want teal", wallBackground)
+	}
+	if inside != ' ' || insideBackground != tcell.ColorDarkSlateGray {
+		t.Fatalf("inside cell = %q background=%v, want colored playfield", inside, insideBackground)
+	}
+
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
 	if err := <-errc; err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}

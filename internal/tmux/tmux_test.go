@@ -32,6 +32,7 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 	wantPrefixes := [][]string{
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "new-session", "-d", "-s", "sidequest-abc123", "-n", "sidequest"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "status", "off"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "history-limit", "100000"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-status", "top"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-format", "#{pane_title}"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.0", "-T", "Command - F12 Snake, F10 shell"},
@@ -40,7 +41,7 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.1", "-T", "Snake - arrows/WASD, R restart, F12 back, F10 shell"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F12", "select-pane", "-t", ":.+"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F10", "detach-client"},
-		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.0"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.1"},
 	}
 
 	if len(runner.calls) != len(wantPrefixes) {
@@ -51,7 +52,7 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 			t.Fatalf("call %d = %#v, want prefix %#v", index, runner.calls[index], want)
 		}
 	}
-	splitCall := runner.calls[6]
+	splitCall := runner.calls[7]
 	splitCommand := splitCall[len(splitCall)-1]
 	if !strings.Contains(splitCommand, "__sidequest-game") {
 		t.Fatalf("split command = %q, want game runner", splitCommand)
@@ -126,6 +127,65 @@ func TestCloseKillsOnlyIsolatedSession(t *testing.T) {
 	}
 }
 
+func TestCloseGamePaneFocusesCommandAndKillsOnlyGamePane(t *testing.T) {
+	runner := &recordingRunner{}
+	layout := Layout{CommandRunner: runner}
+	info := Info{SocketName: "sidequest-abc123", SessionName: "sidequest-abc123"}
+
+	if err := layout.CloseGamePane(info); err != nil {
+		t.Fatalf("CloseGamePane returned error: %v", err)
+	}
+
+	want := [][]string{
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.0"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "kill-pane", "-t", "sidequest-abc123:0.1"},
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("recorded %d calls, want %d", len(runner.calls), len(want))
+	}
+	for index := range want {
+		if !equalStrings(runner.calls[index], want[index]) {
+			t.Fatalf("call %d = %#v, want %#v", index, runner.calls[index], want[index])
+		}
+	}
+}
+
+func TestDetachClientsUsesIsolatedSession(t *testing.T) {
+	runner := &recordingRunner{}
+	layout := Layout{CommandRunner: runner}
+	info := Info{SocketName: "sidequest-abc123", SessionName: "sidequest-abc123"}
+
+	if err := layout.DetachClients(info); err != nil {
+		t.Fatalf("DetachClients returned error: %v", err)
+	}
+
+	want := []string{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "detach-client", "-s", "sidequest-abc123"}
+	if !equalStrings(runner.calls[0], want) {
+		t.Fatalf("detach call = %#v, want %#v", runner.calls[0], want)
+	}
+}
+
+func TestCaptureCommandPaneReadsPlainCommandPaneOutput(t *testing.T) {
+	runner := &recordingRunner{output: "line one\nline two\n"}
+	layout := Layout{CommandRunner: runner}
+	info := Info{SocketName: "sidequest-abc123", SessionName: "sidequest-abc123"}
+
+	output, truncated, err := layout.CaptureCommandPane(info)
+	if err != nil {
+		t.Fatalf("CaptureCommandPane returned error: %v", err)
+	}
+	if output != "line one\nline two\n" {
+		t.Fatalf("output = %q", output)
+	}
+	if truncated {
+		t.Fatal("truncated = true, want false")
+	}
+	want := []string{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "capture-pane", "-p", "-J", "-S", "-100000", "-t", "sidequest-abc123:0.0"}
+	if !equalStrings(runner.outputCalls[0], want) {
+		t.Fatalf("capture call = %#v, want %#v", runner.outputCalls[0], want)
+	}
+}
+
 func TestHasSessionUsesIsolatedServer(t *testing.T) {
 	runner := &recordingRunner{}
 	layout := Layout{CommandRunner: runner}
@@ -171,8 +231,10 @@ func TestShellJoinQuotesRunnerCommand(t *testing.T) {
 }
 
 type recordingRunner struct {
-	calls  [][]string
-	failAt int
+	calls       [][]string
+	outputCalls [][]string
+	output      string
+	failAt      int
 }
 
 func (r *recordingRunner) Run(name string, args ...string) error {
@@ -182,6 +244,12 @@ func (r *recordingRunner) Run(name string, args ...string) error {
 		return errors.New("tmux failed")
 	}
 	return nil
+}
+
+func (r *recordingRunner) Output(name string, args ...string) ([]byte, error) {
+	call := append([]string{name}, args...)
+	r.outputCalls = append(r.outputCalls, call)
+	return []byte(r.output), nil
 }
 
 func (r *recordingRunner) joinedCalls() string {

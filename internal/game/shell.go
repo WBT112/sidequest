@@ -16,10 +16,12 @@ const DefaultGameInterval = 250 * time.Millisecond
 type StateReader func() (session.State, error)
 
 type Shell struct {
-	NewScreen    func() (tcell.Screen, error)
-	ReadState    StateReader
-	PollInterval time.Duration
-	GameInterval time.Duration
+	NewScreen      func() (tcell.Screen, error)
+	ReadState      StateReader
+	OnQuitActive   func() error
+	OnQuitTerminal func() error
+	PollInterval   time.Duration
+	GameInterval   time.Duration
 }
 
 type viewState struct {
@@ -89,6 +91,12 @@ func (s Shell) Run(ctx context.Context) error {
 			case *tcell.EventKey:
 				switch {
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'q' || typed.Rune() == 'Q'):
+					if session.IsTerminalStatus(view.SessionState) && s.OnQuitTerminal != nil {
+						return s.OnQuitTerminal()
+					}
+					if !session.IsTerminalStatus(view.SessionState) && s.OnQuitActive != nil {
+						return s.OnQuitActive()
+					}
 					return nil
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'p' || typed.Rune() == 'P'):
 					view.Paused = !view.Paused
@@ -170,8 +178,9 @@ func render(screen tcell.Screen, view viewState) {
 	scoreStyle := style.Foreground(tcell.ColorGreen)
 
 	drawBox(screen, 0, 0, width, height, style)
+	drawPlayfield(screen, style)
 
-	controlLine := "F12/Ctrl-b Down focuses game. Arrows/WASD start. F10 detach/list."
+	controlLine := "Arrows/WASD start. F12 command. F10 detach/list."
 	if view.Started {
 		controlLine = "Arrows/WASD move  P pause/resume  Q exit/cleanup  F10 detach/list"
 	}
@@ -203,6 +212,7 @@ func render(screen tcell.Screen, view viewState) {
 	}
 
 	drawSnake(screen, view.Game, style)
+	drawResultPanel(screen, view, style)
 
 	for _, line := range lines {
 		drawText(screen, 1, line.y, width-2, line.text, line.style)
@@ -234,10 +244,10 @@ func boardBounds(screen tcell.Screen) (int, int, int, int) {
 	}
 
 	x := 1
-	y := 4
+	y := 5
 	width := screenWidth - 2
 	height := screenHeight - y - 1
-	if screenHeight < 7 {
+	if screenHeight < 8 {
 		y = 1
 		height = screenHeight - 2
 	}
@@ -250,14 +260,42 @@ func boardBounds(screen tcell.Screen) (int, int, int, int) {
 	return x, y, width, height
 }
 
+func drawPlayfield(screen tcell.Screen, style tcell.Style) {
+	width, height := screen.Size()
+	boardX, boardY, boardWidth, boardHeight := boardBounds(screen)
+	topWallY := boardY - 1
+	bottomWallY := boardY + boardHeight
+	if width < 2 || height < 8 || topWallY <= 0 || bottomWallY >= height {
+		return
+	}
+
+	boardStyle := style.Background(tcell.ColorDarkSlateGray)
+	wallStyle := style.Foreground(tcell.ColorTeal).Background(tcell.ColorTeal).Bold(true)
+
+	for y := boardY; y < boardY+boardHeight; y++ {
+		for x := boardX; x < boardX+boardWidth; x++ {
+			screen.SetContent(x, y, ' ', nil, boardStyle)
+		}
+	}
+	for x := 0; x < width; x++ {
+		screen.SetContent(x, topWallY, tcell.RuneBlock, nil, wallStyle)
+		screen.SetContent(x, bottomWallY, tcell.RuneBlock, nil, wallStyle)
+	}
+	for y := boardY; y < bottomWallY; y++ {
+		screen.SetContent(0, y, tcell.RuneBlock, nil, wallStyle)
+		screen.SetContent(width-1, y, tcell.RuneBlock, nil, wallStyle)
+	}
+}
+
 func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
 	if game == nil {
 		return
 	}
 
 	boardX, boardY, boardWidth, boardHeight := boardBounds(screen)
-	foodStyle := baseStyle.Foreground(tcell.ColorRed)
-	bodyStyle := baseStyle.Foreground(tcell.ColorGreen)
+	boardBackground := tcell.ColorDarkSlateGray
+	foodStyle := baseStyle.Foreground(tcell.ColorYellow).Background(boardBackground).Bold(true)
+	bodyStyle := baseStyle.Foreground(tcell.ColorLimeGreen).Background(boardBackground)
 	headStyle := bodyStyle.Bold(true)
 
 	if game.Food.X >= 0 && game.Food.X < boardWidth && game.Food.Y >= 0 && game.Food.Y < boardHeight {
@@ -276,6 +314,90 @@ func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
 		}
 		screen.SetContent(boardX+point.X, boardY+point.Y, cell, nil, style)
 	}
+}
+
+func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style) {
+	if view.Game == nil || (!view.Game.Over && !view.Frozen) {
+		return
+	}
+
+	boardX, boardY, boardWidth, boardHeight := boardBounds(screen)
+	if boardWidth < 16 || boardHeight < 5 {
+		return
+	}
+
+	title := "GAME OVER"
+	action := "R restart  Q exit"
+	accent := tcell.ColorOrange
+	if view.Frozen {
+		title = "RUN FINISHED"
+		action = "Q exit/cleanup"
+		accent = tcell.ColorAqua
+	}
+	lines := []string{
+		title,
+		"Final score: " + scoreText(view.Game),
+		action,
+	}
+
+	panelWidth := maxTextWidth(lines) + 4
+	if panelWidth < 24 {
+		panelWidth = 24
+	}
+	if panelWidth > boardWidth {
+		panelWidth = boardWidth
+	}
+	panelHeight := 7
+	if boardHeight < panelHeight {
+		panelHeight = 5
+	}
+	panelX := boardX + (boardWidth-panelWidth)/2
+	panelY := boardY + (boardHeight-panelHeight)/2
+
+	panelStyle := baseStyle.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
+	borderStyle := baseStyle.Foreground(accent).Background(tcell.ColorBlack).Bold(true)
+	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
+	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
+
+	lineYs := []int{panelY + 1, panelY + panelHeight/2, panelY + panelHeight - 2}
+	for index, line := range lines {
+		lineStyle := panelStyle
+		if index == 0 {
+			lineStyle = borderStyle
+		}
+		drawCenteredText(screen, panelX+1, lineYs[index], panelWidth-2, line, lineStyle)
+	}
+}
+
+func fillRect(screen tcell.Screen, x int, y int, width int, height int, char rune, style tcell.Style) {
+	for row := y; row < y+height; row++ {
+		for col := x; col < x+width; col++ {
+			screen.SetContent(col, row, char, nil, style)
+		}
+	}
+}
+
+func drawCenteredText(screen tcell.Screen, x int, y int, width int, text string, style tcell.Style) {
+	textWidth := textDisplayWidth(text)
+	if textWidth > width {
+		drawText(screen, x, y, width, text, style)
+		return
+	}
+	drawText(screen, x+(width-textWidth)/2, y, textWidth, text, style)
+}
+
+func maxTextWidth(lines []string) int {
+	maximum := 0
+	for _, line := range lines {
+		if width := textDisplayWidth(line); width > maximum {
+			maximum = width
+		}
+	}
+	return maximum
+}
+
+func textDisplayWidth(text string) int {
+	return len([]rune(text))
 }
 
 func directionFromKey(event *tcell.EventKey) (Direction, bool) {
