@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/WBT112/sidequest/internal/session"
 )
 
 func TestParseCommandAfterSeparator(t *testing.T) {
@@ -91,11 +93,16 @@ func TestRunVersion(t *testing.T) {
 func TestRunCommandRunsPreflightBeforeReportingCommand(t *testing.T) {
 	var out bytes.Buffer
 	var stderr bytes.Buffer
+	createSessionCalled := false
 	app := App{
 		Out: &out,
 		Err: &stderr,
 		Preflight: func() error {
 			return fmt.Errorf("preflight failed")
+		},
+		CreateSession: func() (session.Session, error) {
+			createSessionCalled = true
+			return session.Session{}, nil
 		},
 	}
 
@@ -109,6 +116,9 @@ func TestRunCommandRunsPreflightBeforeReportingCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "preflight failed") {
 		t.Fatalf("stderr = %q, want preflight error", stderr.String())
+	}
+	if createSessionCalled {
+		t.Fatal("CreateSession was called after preflight failure")
 	}
 }
 
@@ -125,6 +135,44 @@ func TestRunHelpSkipsPreflight(t *testing.T) {
 	code := app.Run([]string{"--help"})
 	if code != 0 {
 		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+}
+
+func TestRunCommandCreatesSessionAndHandoffsCommand(t *testing.T) {
+	var out bytes.Buffer
+	runtimeSession := session.Session{ID: "session-1", Dir: "/runtime/session-1"}
+	var handedOffSession session.Session
+	var handedOffCommand session.Command
+
+	app := App{
+		Out:       &out,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			return runtimeSession, nil
+		},
+		HandoffCommand: func(gotSession session.Session, gotCommand session.Command) (session.Command, error) {
+			handedOffSession = gotSession
+			handedOffCommand = gotCommand
+			return gotCommand, nil
+		},
+	}
+
+	code := app.Run([]string{"--", "printf", "%s\n", "|", ">", "*.go"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if handedOffSession.ID != runtimeSession.ID {
+		t.Fatalf("handoff session = %#v, want %#v", handedOffSession, runtimeSession)
+	}
+	if handedOffCommand.Executable != "printf" {
+		t.Fatalf("handoff executable = %q, want %q", handedOffCommand.Executable, "printf")
+	}
+	wantArgs := []string{"%s\n", "|", ">", "*.go"}
+	if !equalSlices(handedOffCommand.Arguments, wantArgs) {
+		t.Fatalf("handoff args = %#v, want %#v", handedOffCommand.Arguments, wantArgs)
+	}
+	if !strings.Contains(out.String(), "created session: session-1") {
+		t.Fatalf("stdout = %q, want session id", out.String())
 	}
 }
 

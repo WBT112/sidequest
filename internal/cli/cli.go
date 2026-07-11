@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/WBT112/sidequest/internal/preflight"
+	"github.com/WBT112/sidequest/internal/session"
 )
 
 const usage = `Usage:
@@ -38,10 +41,12 @@ type Result struct {
 }
 
 type App struct {
-	Out       io.Writer
-	Err       io.Writer
-	Version   string
-	Preflight func() error
+	Out            io.Writer
+	Err            io.Writer
+	Version        string
+	Preflight      func() error
+	CreateSession  func() (session.Session, error)
+	HandoffCommand func(session.Session, session.Command) (session.Command, error)
 }
 
 func (a App) Run(args []string) int {
@@ -64,11 +69,27 @@ func (a App) Run(args []string) int {
 			return 2
 		}
 
+		command := session.Command{
+			Executable: result.Config.Executable,
+			Arguments:  result.Config.Arguments,
+		}
+		runtimeSession, err := a.createSession()
+		if err != nil {
+			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+			return 2
+		}
+		receivedCommand, err := a.handoffCommand(runtimeSession, command)
+		if err != nil {
+			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+			return 2
+		}
+
 		fmt.Fprintf(
 			a.outputWriter(),
-			"parsed command:\n  executable: %q\n  arguments: %q\n",
-			result.Config.Executable,
-			result.Config.Arguments,
+			"created session: %s\ncommand handoff:\n  executable: %q\n  arguments: %q\n",
+			runtimeSession.ID,
+			receivedCommand.Executable,
+			receivedCommand.Arguments,
 		)
 		return 0
 	}
@@ -140,4 +161,41 @@ func (a App) runPreflight() error {
 		return a.Preflight()
 	}
 	return preflight.Validate(preflight.DefaultEnvironment())
+}
+
+func (a App) createSession() (session.Session, error) {
+	if a.CreateSession != nil {
+		return a.CreateSession()
+	}
+	return session.DefaultManager().Create()
+}
+
+func (a App) handoffCommand(runtimeSession session.Session, command session.Command) (session.Command, error) {
+	if a.HandoffCommand != nil {
+		return a.HandoffCommand(runtimeSession, command)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	listener, err := session.ListenCommand(runtimeSession)
+	if err != nil {
+		return session.Command{}, err
+	}
+	defer listener.Close()
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- session.SendCommand(ctx, runtimeSession.SocketPath, command)
+	}()
+
+	receivedCommand, err := listener.Receive(ctx)
+	if err != nil {
+		return session.Command{}, err
+	}
+	if err := <-errc; err != nil {
+		return session.Command{}, err
+	}
+
+	return receivedCommand, nil
 }
