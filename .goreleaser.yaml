@@ -1,0 +1,69 @@
+version: 2
+
+project_name: sidequest
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sidequest
+    main: ./cmd/sidequest
+    binary: sidequest
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: linux
+    ids:
+      - sidequest
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+nfpms:
+  - id: linux-packages
+    ids:
+      - sidequest
+    package_name: sidequest
+    file_name_template: >-
+      {{ .PackageName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    vendor: WBT112
+    homepage: https://github.com/WBT112/sidequest
+    maintainer: WBT112
+    description: Play a tiny terminal game while waiting for a long-running command to finish.
+    license: MIT
+    section: utils
+    priority: optional
+    bindir: /usr/bin
+    formats:
+      - deb
+      - rpm
+    dependencies:
+      - tmux
+    contents:
+      - src: ./LICENSE
+        dst: /usr/share/doc/sidequest/LICENSE
+      - src: ./README.md
+        dst: /usr/share/doc/sidequest/README.md
+      - src: ./docs/man/sidequest.1
+        dst: /usr/share/man/man1/sidequest.1

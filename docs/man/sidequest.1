@@ -1,0 +1,74 @@
+.TH SIDEQUEST 1
+.SH NAME
+sidequest \- play a tiny terminal game while waiting for a command
+.SH SYNOPSIS
+.B sidequest
+.RI [ options ]
+.B --
+.I command
+.RI [ arguments... ]
+.PP
+.B sidequest list
+.PP
+.B sidequest attach
+.I session-id
+.SH DESCRIPTION
+.B sidequest
+runs a command in one tmux pane and opens a small terminal game in another.
+When the command finishes, the game freezes and Sidequest shows the command
+state, exit code or signal, runtime, and final score.
+.PP
+Commands are executed directly. Arguments after
+.B --
+are preserved as an argument vector and are not passed through a shell.
+.SH OPTIONS
+.TP
+.B \-h, \-\-help
+Show help text.
+.TP
+.B \-v, \-\-version
+Show the Sidequest version.
+.SH COMMANDS
+.TP
+.B list
+List Sidequest runtime sessions.
+.TP
+.BI attach " session-id"
+Attach to an existing Sidequest tmux session.
+.SH CONTROLS
+.TP
+.B F12
+Switch between the command pane and the game pane.
+.TP
+.B F10
+Detach from the Sidequest tmux session and return to the shell.
+.TP
+.B WASD or arrow keys
+Start and control Snake in the game pane.
+.TP
+.B P
+Pause or resume the game.
+.TP
+.B Q
+Leave the game pane. The command pane is not killed.
+.SH REQUIREMENTS
+Sidequest requires Linux and
+.BR tmux (1)
+at runtime.
+.SH FILES
+.TP
+.I /usr/bin/sidequest
+Installed Sidequest executable.
+.TP
+.I /usr/share/doc/sidequest/
+Installed license and README documentation.
+.TP
+.I /usr/share/man/man1/sidequest.1
+Installed manual page.
+.SH EXIT STATUS
+Sidequest returns zero when setup and attach handling succeed. The command
+runner records the child command result in Sidequest session metadata.
+.SH BUGS
+Report issues at
+.UR https://github.com/WBT112/sidequest/issues
+.UE
