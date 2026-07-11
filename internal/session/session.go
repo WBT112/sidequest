@@ -270,6 +270,17 @@ func FromSocketPath(socketPath string) Session {
 	}
 }
 
+func FromStatePath(statePath string) Session {
+	dir := filepath.Dir(statePath)
+	id := filepath.Base(dir)
+	return Session{
+		ID:         id,
+		Dir:        dir,
+		StatePath:  statePath,
+		SocketPath: filepath.Join(dir, DefaultCommandSocket),
+	}
+}
+
 func Cleanup(session Session) error {
 	if session.Dir == "" {
 		return nil

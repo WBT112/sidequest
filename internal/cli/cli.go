@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"github.com/WBT112/sidequest/internal/commandexec"
+	"github.com/WBT112/sidequest/internal/game"
 	"github.com/WBT112/sidequest/internal/preflight"
 	"github.com/WBT112/sidequest/internal/session"
 	"github.com/WBT112/sidequest/internal/tmux"
 )
 
 const commandRunnerMode = "__sidequest-command-runner"
+const gameRunnerMode = "__sidequest-game"
 
 const usage = `Usage:
   sidequest list
@@ -59,10 +61,18 @@ type App struct {
 	RunLayout      func(session.Session, session.Command) error
 	ReceiveCommand func(context.Context, string) (session.Command, error)
 	ExecCommand    func(session.Session, session.Command) error
+	RunGameShell   func(string) error
 	Now            func() time.Time
 }
 
 func (a App) Run(args []string) int {
+	if len(args) == 2 && args[0] == gameRunnerMode {
+		if err := a.runGameShell(args[1]); err != nil {
+			fmt.Fprintf(a.errorWriter(), "sidequest game: %v\n", err)
+			return 2
+		}
+		return 0
+	}
 	if len(args) == 2 && args[0] == commandRunnerMode {
 		if err := a.runCommandRunner(args[1]); err != nil {
 			fmt.Fprintf(a.errorWriter(), "sidequest command runner: %v\n", err)
@@ -291,7 +301,11 @@ func (a App) runLayout(runtimeSession session.Session, command session.Command) 
 	}
 
 	layout := tmux.Layout{}
-	info, err := layout.Start(runtimeSession, []string{executable, commandRunnerMode, runtimeSession.SocketPath})
+	info, err := layout.Start(
+		runtimeSession,
+		[]string{executable, commandRunnerMode, runtimeSession.SocketPath},
+		[]string{executable, gameRunnerMode, runtimeSession.StatePath},
+	)
 	if err != nil {
 		return err
 	}
@@ -329,6 +343,20 @@ func (a App) runCommandRunner(socketPath string) error {
 		execute = commandexec.DefaultExecutor().Run
 	}
 	return execute(runtimeSession, command)
+}
+
+func (a App) runGameShell(statePath string) error {
+	if a.RunGameShell != nil {
+		return a.RunGameShell(statePath)
+	}
+
+	runtimeSession := session.FromStatePath(statePath)
+	shell := game.Shell{
+		ReadState: func() (session.State, error) {
+			return session.ReadState(runtimeSession)
+		},
+	}
+	return shell.Run(context.Background())
 }
 
 func (a App) now() time.Time {

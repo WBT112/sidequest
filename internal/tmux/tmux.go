@@ -9,8 +9,6 @@ import (
 	"github.com/WBT112/sidequest/internal/session"
 )
 
-const placeholderCommand = "printf 'Sidequest placeholder pane\\n'; while :; do sleep 3600; done"
-
 type Runner interface {
 	Run(name string, args ...string) error
 }
@@ -31,9 +29,12 @@ type Info struct {
 	SessionName string
 }
 
-func (l Layout) Start(runtimeSession session.Session, commandRunner []string) (Info, error) {
+func (l Layout) Start(runtimeSession session.Session, commandRunner []string, gameRunner []string) (Info, error) {
 	if len(commandRunner) == 0 {
 		return Info{}, fmt.Errorf("missing command runner")
+	}
+	if len(gameRunner) == 0 {
+		return Info{}, fmt.Errorf("missing game runner")
 	}
 
 	tmuxPath := l.TmuxPath
@@ -70,7 +71,7 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string) (I
 	if err := run("set-option", "-t", info.SessionName, "remain-on-exit", "on"); err != nil {
 		return cleanup(fmt.Errorf("enable command pane remain-on-exit: %w", err))
 	}
-	if err := run("split-window", "-v", "-l", "10", "-t", info.SessionName+":0.0", placeholderCommand); err != nil {
+	if err := run("split-window", "-v", "-l", "10", "-t", info.SessionName+":0.0", shellJoin(gameRunner)); err != nil {
 		return cleanup(fmt.Errorf("create placeholder pane: %w", err))
 	}
 	if err := run("bind-key", "-n", "F12", "select-pane", "-t", ":.+"); err != nil {

@@ -209,6 +209,24 @@ func TestRunCommandRunnerReceivesAndExecsCommand(t *testing.T) {
 	}
 }
 
+func TestRunGameRunnerDispatchesStatePath(t *testing.T) {
+	receivedPath := ""
+	app := App{
+		RunGameShell: func(statePath string) error {
+			receivedPath = statePath
+			return nil
+		},
+	}
+
+	code := app.Run([]string{gameRunnerMode, "/tmp/sidequest-1000/session-1/state.json"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if receivedPath != "/tmp/sidequest-1000/session-1/state.json" {
+		t.Fatalf("receivedPath = %q", receivedPath)
+	}
+}
+
 func TestRunListShowsMetadataWithoutCommandArguments(t *testing.T) {
 	var out bytes.Buffer
 	started := time.Date(2026, 7, 11, 16, 40, 12, 0, time.Local)

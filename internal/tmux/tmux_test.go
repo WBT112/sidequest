@@ -13,7 +13,11 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 	layout := Layout{CommandRunner: runner}
 	runtimeSession := session.Session{ID: "abc123", SocketPath: "/run/user/1000/sidequest/abc123/command.sock"}
 
-	info, err := layout.Start(runtimeSession, []string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath})
+	info, err := layout.Start(
+		runtimeSession,
+		[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+		[]string{"/usr/bin/sidequest", "__sidequest-game", "/run/user/1000/sidequest/abc123/state.json"},
+	)
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -42,6 +46,11 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 			t.Fatalf("call %d = %#v, want prefix %#v", index, runner.calls[index], want)
 		}
 	}
+	splitCall := runner.calls[3]
+	splitCommand := splitCall[len(splitCall)-1]
+	if !strings.Contains(splitCommand, "__sidequest-game") {
+		t.Fatalf("split command = %q, want game runner", splitCommand)
+	}
 }
 
 func TestStartDoesNotPutUserCommandInTmuxCommands(t *testing.T) {
@@ -49,7 +58,11 @@ func TestStartDoesNotPutUserCommandInTmuxCommands(t *testing.T) {
 	layout := Layout{CommandRunner: runner}
 	runtimeSession := session.Session{ID: "no-secret", SocketPath: "/tmp/sidequest-1000/no-secret/command.sock"}
 
-	_, err := layout.Start(runtimeSession, []string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath})
+	_, err := layout.Start(
+		runtimeSession,
+		[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+		[]string{"/usr/bin/sidequest", "__sidequest-game", "/tmp/sidequest-1000/no-secret/state.json"},
+	)
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -97,7 +110,11 @@ func TestStartKillsSessionWhenSetupFails(t *testing.T) {
 	layout := Layout{CommandRunner: runner}
 	runtimeSession := session.Session{ID: "cleanup", SocketPath: "/tmp/sidequest-1000/cleanup/command.sock"}
 
-	_, err := layout.Start(runtimeSession, []string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath})
+	_, err := layout.Start(
+		runtimeSession,
+		[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+		[]string{"/usr/bin/sidequest", "__sidequest-game", "/tmp/sidequest-1000/cleanup/state.json"},
+	)
 	if err == nil {
 		t.Fatal("Start succeeded, want error")
 	}
