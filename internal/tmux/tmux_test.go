@@ -77,6 +77,21 @@ func TestAttachUsesIsolatedServer(t *testing.T) {
 	}
 }
 
+func TestHasSessionUsesIsolatedServer(t *testing.T) {
+	runner := &recordingRunner{}
+	layout := Layout{CommandRunner: runner}
+	info := Info{SocketName: "sidequest-abc123", SessionName: "sidequest-abc123"}
+
+	if !layout.HasSession(info) {
+		t.Fatal("HasSession returned false, want true")
+	}
+
+	want := []string{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "has-session", "-t", "sidequest-abc123"}
+	if !equalStrings(runner.calls[0], want) {
+		t.Fatalf("has-session call = %#v, want %#v", runner.calls[0], want)
+	}
+}
+
 func TestStartKillsSessionWhenSetupFails(t *testing.T) {
 	runner := &recordingRunner{failAt: 2}
 	layout := Layout{CommandRunner: runner}

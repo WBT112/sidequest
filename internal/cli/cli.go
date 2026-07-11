@@ -18,6 +18,8 @@ import (
 const commandRunnerMode = "__sidequest-command-runner"
 
 const usage = `Usage:
+  sidequest list
+  sidequest attach <session-id>
   sidequest [options] -- <command> [arguments...]
 
 Options:
@@ -51,6 +53,9 @@ type App struct {
 	Version        string
 	Preflight      func() error
 	CreateSession  func() (session.Session, error)
+	ListSessions   func() ([]session.Record, error)
+	AttachSession  func(string) error
+	TmuxHasSession func(tmux.Info) bool
 	RunLayout      func(session.Session, session.Command) error
 	ReceiveCommand func(context.Context, string) (session.Command, error)
 	ExecCommand    func(session.Session, session.Command) error
@@ -64,6 +69,30 @@ func (a App) Run(args []string) int {
 			return commandexec.ExitCodeForError(err)
 		}
 		return 0
+	}
+	if len(args) > 0 {
+		switch args[0] {
+		case "list":
+			if len(args) != 1 {
+				fmt.Fprintf(a.errorWriter(), "sidequest: list does not accept arguments\n\n%s", usage)
+				return 2
+			}
+			if err := a.runList(); err != nil {
+				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+				return 2
+			}
+			return 0
+		case "attach":
+			if len(args) != 2 {
+				fmt.Fprintf(a.errorWriter(), "sidequest: attach requires a session id\n\n%s", usage)
+				return 2
+			}
+			if err := a.runAttach(args[1]); err != nil {
+				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+				return 2
+			}
+			return 0
+		}
 	}
 
 	result, err := Parse(args)
@@ -179,6 +208,72 @@ func (a App) createSession() (session.Session, error) {
 	return session.DefaultManager().Create()
 }
 
+func (a App) listSessions() ([]session.Record, error) {
+	if a.ListSessions != nil {
+		return a.ListSessions()
+	}
+	return session.DefaultManager().List()
+}
+
+func (a App) runList() error {
+	records, err := a.listSessions()
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(a.outputWriter(), "ID             STATE        STARTED      ELAPSED")
+	for _, record := range records {
+		state := record.State
+		displayState := state.Status
+		if state.TmuxSocket != "" && !a.tmuxHasSession(infoFromRecord(record)) {
+			displayState = "stale"
+		}
+
+		startedAt := displayStartTime(state)
+		fmt.Fprintf(
+			a.outputWriter(),
+			"%-14s %-12s %-12s %s\n",
+			record.Session.ID,
+			displayState,
+			startedAt,
+			formatElapsed(state, a.now()),
+		)
+	}
+
+	return nil
+}
+
+func (a App) runAttach(id string) error {
+	if err := a.runPreflight(); err != nil {
+		return err
+	}
+	if a.AttachSession != nil {
+		return a.AttachSession(id)
+	}
+
+	record, err := session.DefaultManager().Find(id)
+	if err != nil {
+		return err
+	}
+	if record.State.TmuxSocket == "" {
+		return fmt.Errorf("session %q has no tmux socket metadata; it cannot be attached", id)
+	}
+
+	info := infoFromRecord(record)
+	layout := tmux.Layout{}
+	if !a.tmuxHasSession(info) {
+		return fmt.Errorf("session %q is stale: tmux server %q is no longer running", id, info.SocketName)
+	}
+	return layout.Attach(info)
+}
+
+func (a App) tmuxHasSession(info tmux.Info) bool {
+	if a.TmuxHasSession != nil {
+		return a.TmuxHasSession(info)
+	}
+	return tmux.Layout{}.HasSession(info)
+}
+
 func (a App) runLayout(runtimeSession session.Session, command session.Command) error {
 	if a.RunLayout != nil {
 		return a.RunLayout(runtimeSession, command)
@@ -241,4 +336,43 @@ func (a App) now() time.Time {
 		return a.Now()
 	}
 	return time.Now()
+}
+
+func infoFromRecord(record session.Record) tmux.Info {
+	return tmux.Info{
+		SocketName:  record.State.TmuxSocket,
+		SessionName: "sidequest-" + record.Session.ID,
+	}
+}
+
+func displayStartTime(state session.State) string {
+	started := state.CreatedAt
+	if state.StartedAt != nil {
+		started = *state.StartedAt
+	}
+	if started.IsZero() {
+		return "-"
+	}
+	return started.Local().Format("15:04:05")
+}
+
+func formatElapsed(state session.State, now time.Time) string {
+	var elapsed time.Duration
+	switch {
+	case state.DurationMillis != nil:
+		elapsed = time.Duration(*state.DurationMillis) * time.Millisecond
+	case state.StartedAt != nil:
+		elapsed = now.Sub(*state.StartedAt)
+	default:
+		elapsed = now.Sub(state.CreatedAt)
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+
+	total := int64(elapsed.Round(time.Second).Seconds())
+	hours := total / 3600
+	minutes := (total % 3600) / 60
+	seconds := total % 60
+	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 }

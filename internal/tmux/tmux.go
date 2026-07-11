@@ -42,7 +42,7 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string) (I
 	}
 	runner := l.CommandRunner
 	if runner == nil {
-		runner = ExecRunner{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+		runner = ExecRunner{}
 	}
 
 	info := Info{
@@ -98,6 +98,20 @@ func (l Layout) Attach(info Info) error {
 	}
 
 	return nil
+}
+
+func (l Layout) HasSession(info Info) bool {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = ExecRunner{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+	}
+
+	err := runner.Run(tmuxPath, "-f", "/dev/null", "-L", info.SocketName, "has-session", "-t", info.SessionName)
+	return err == nil
 }
 
 func (r ExecRunner) Run(name string, args ...string) error {

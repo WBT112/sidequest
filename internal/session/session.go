@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,11 @@ type Session struct {
 	Dir        string
 	StatePath  string
 	SocketPath string
+}
+
+type Record struct {
+	Session Session
+	State   State
 }
 
 type State struct {
@@ -122,6 +128,76 @@ func (m Manager) Create() (Session, error) {
 	}
 
 	return Session{}, fmt.Errorf("create unique session id: exhausted %d attempts", maxSessionIDAttempts)
+}
+
+func (m Manager) List() ([]Record, error) {
+	if m.BaseDir == "" {
+		m.BaseDir = RuntimeBaseDir(os.Getenv("XDG_RUNTIME_DIR"), m.uid())
+	}
+
+	entries, err := os.ReadDir(m.BaseDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read runtime directory: %w", err)
+	}
+
+	records := make([]Record, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		runtimeSession := newSession(m.BaseDir, entry.Name())
+		state, err := ReadState(runtimeSession)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if state.ID == "" {
+			state.ID = runtimeSession.ID
+		}
+		if state.ID != runtimeSession.ID {
+			continue
+		}
+
+		records = append(records, Record{Session: runtimeSession, State: state})
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].State.CreatedAt.Before(records[j].State.CreatedAt)
+	})
+
+	return records, nil
+}
+
+func (m Manager) Find(id string) (Record, error) {
+	if m.BaseDir == "" {
+		m.BaseDir = RuntimeBaseDir(os.Getenv("XDG_RUNTIME_DIR"), m.uid())
+	}
+	if !validSessionID(id) {
+		return Record{}, fmt.Errorf("invalid session id %q", id)
+	}
+
+	runtimeSession := newSession(m.BaseDir, id)
+	state, err := ReadState(runtimeSession)
+	if errors.Is(err, os.ErrNotExist) {
+		return Record{}, fmt.Errorf("unknown session %q: no Sidequest metadata found", id)
+	}
+	if err != nil {
+		return Record{}, err
+	}
+	if state.ID == "" {
+		state.ID = id
+	}
+	if state.ID != id {
+		return Record{}, fmt.Errorf("session %q metadata does not match requested id", id)
+	}
+
+	return Record{Session: runtimeSession, State: state}, nil
 }
 
 func WriteState(session Session, state State) error {

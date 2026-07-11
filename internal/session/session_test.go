@@ -226,6 +226,66 @@ func TestUpdateStatePersistsTmuxSocketWithoutCommand(t *testing.T) {
 	assertRuntimeFilesDoNotContain(t, session.Dir, "bash", "sleep 30", "exit 7")
 }
 
+func TestListReadsOnlySessionMetadata(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := Manager{
+		BaseDir:     base,
+		IDGenerator: fixedID("brave-otter"),
+		Now: func() time.Time {
+			return time.Date(2026, 7, 11, 16, 40, 12, 0, time.UTC)
+		},
+	}
+	created, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "not-a-session.txt"), []byte("ignore"), 0o600); err != nil {
+		t.Fatalf("write unrelated runtime file: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(base, "missing-state"), 0o700); err != nil {
+		t.Fatalf("create missing-state dir: %v", err)
+	}
+
+	records, err := manager.List()
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("List returned %d records, want 1: %#v", len(records), records)
+	}
+	if records[0].Session.ID != created.ID || records[0].State.ID != created.ID {
+		t.Fatalf("record = %#v, want session %q", records[0], created.ID)
+	}
+}
+
+func TestFindReturnsUnknownSessionError(t *testing.T) {
+	manager := Manager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+
+	_, err := manager.Find("missing")
+	if err == nil {
+		t.Fatal("Find succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "unknown session") {
+		t.Fatalf("Find error = %v, want unknown session", err)
+	}
+}
+
+func TestFindReturnsExistingSession(t *testing.T) {
+	manager := Manager{BaseDir: filepath.Join(t.TempDir(), "sidequest"), IDGenerator: fixedID("quiet-fox")}
+	created, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	record, err := manager.Find("quiet-fox")
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+	if record.Session.ID != created.ID || record.State.ID != created.ID {
+		t.Fatalf("record = %#v, want session %q", record, created.ID)
+	}
+}
+
 func fixedID(id string) func() (string, error) {
 	return func() (string, error) {
 		return id, nil

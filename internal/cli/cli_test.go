@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/WBT112/sidequest/internal/session"
+	"github.com/WBT112/sidequest/internal/tmux"
 )
 
 func TestParseCommandAfterSeparator(t *testing.T) {
@@ -204,6 +206,125 @@ func TestRunCommandRunnerReceivesAndExecsCommand(t *testing.T) {
 	}
 	if !equalSlices(executed.Arguments, []string{"-c", "exit 7"}) {
 		t.Fatalf("executed arguments = %#v", executed.Arguments)
+	}
+}
+
+func TestRunListShowsMetadataWithoutCommandArguments(t *testing.T) {
+	var out bytes.Buffer
+	started := time.Date(2026, 7, 11, 16, 40, 12, 0, time.Local)
+	durationMillis := int64(3*time.Minute+18*time.Second) / int64(time.Millisecond)
+	app := App{
+		Out: &out,
+		Now: func() time.Time { return started.Add(10 * time.Minute) },
+		ListSessions: func() ([]session.Record, error) {
+			return []session.Record{
+				{
+					Session: session.Session{ID: "brave-otter"},
+					State: session.State{
+						ID:             "brave-otter",
+						Status:         session.StatusCompleted,
+						CreatedAt:      started.Add(-time.Minute),
+						StartedAt:      &started,
+						DurationMillis: &durationMillis,
+						TmuxSocket:     "sidequest-brave-otter",
+					},
+				},
+			}, nil
+		},
+		TmuxHasSession: func(tmux.Info) bool { return true },
+	}
+
+	code := app.Run([]string{"list"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+
+	output := out.String()
+	for _, want := range []string{"ID", "STATE", "STARTED", "ELAPSED", "brave-otter", "completed", "16:40:12", "00:03:18"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("list output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{"bash", "sleep 30", "exit 7"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("list output exposes command data %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestRunListMarksStaleTmuxMetadata(t *testing.T) {
+	var out bytes.Buffer
+	created := time.Date(2026, 7, 11, 16, 40, 12, 0, time.UTC)
+	app := App{
+		Out: &out,
+		Now: func() time.Time { return created },
+		ListSessions: func() ([]session.Record, error) {
+			return []session.Record{
+				{
+					Session: session.Session{ID: "quiet-fox"},
+					State: session.State{
+						ID:         "quiet-fox",
+						Status:     session.StatusRunning,
+						CreatedAt:  created,
+						TmuxSocket: "sidequest-quiet-fox",
+					},
+				},
+			}, nil
+		},
+		TmuxHasSession: func(tmux.Info) bool { return false },
+	}
+
+	code := app.Run([]string{"list"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), "stale") {
+		t.Fatalf("list output = %q, want stale marker", out.String())
+	}
+}
+
+func TestRunAttachValidatesPreflightFirst(t *testing.T) {
+	var stderr bytes.Buffer
+	attachCalled := false
+	app := App{
+		Err: &stderr,
+		Preflight: func() error {
+			return fmt.Errorf("not interactive")
+		},
+		AttachSession: func(string) error {
+			attachCalled = true
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"attach", "session-1"})
+	if code != 2 {
+		t.Fatalf("Run exit code = %d, want 2", code)
+	}
+	if attachCalled {
+		t.Fatal("AttachSession was called after preflight failure")
+	}
+	if !strings.Contains(stderr.String(), "not interactive") {
+		t.Fatalf("stderr = %q, want preflight error", stderr.String())
+	}
+}
+
+func TestRunAttachCallsAttachSession(t *testing.T) {
+	attachedID := ""
+	app := App{
+		Preflight: func() error { return nil },
+		AttachSession: func(id string) error {
+			attachedID = id
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"attach", "session-1"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if attachedID != "session-1" {
+		t.Fatalf("attachedID = %q, want %q", attachedID, "session-1")
 	}
 }
 
