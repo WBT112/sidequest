@@ -15,6 +15,11 @@ import (
 
 const (
 	StatusCreated           = "created"
+	StatusRunning           = "running"
+	StatusCompleted         = "completed"
+	StatusFailed            = "failed"
+	StatusInterrupted       = "interrupted"
+	StatusStartFailed       = "start_failed"
 	DefaultStateFileName    = "state.json"
 	DefaultCommandSocket    = "command.sock"
 	runtimeDirectoryPerm    = 0o700
@@ -31,13 +36,17 @@ type Session struct {
 }
 
 type State struct {
-	ID         string     `json:"id"`
-	Status     string     `json:"status"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	ExitCode   *int       `json:"exit_code,omitempty"`
-	TmuxSocket string     `json:"tmux_socket,omitempty"`
+	ID             string     `json:"id"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	DurationMillis *int64     `json:"duration_millis,omitempty"`
+	ExitCode       *int       `json:"exit_code,omitempty"`
+	ExitSignal     string     `json:"exit_signal,omitempty"`
+	StartError     string     `json:"start_error,omitempty"`
+	TmuxSocket     string     `json:"tmux_socket,omitempty"`
 }
 
 type Manager struct {
@@ -172,6 +181,17 @@ func UpdateState(session Session, now time.Time, update func(*State)) error {
 	state.UpdatedAt = now.UTC()
 
 	return WriteState(session, state)
+}
+
+func FromSocketPath(socketPath string) Session {
+	dir := filepath.Dir(socketPath)
+	id := filepath.Base(dir)
+	return Session{
+		ID:         id,
+		Dir:        dir,
+		StatePath:  filepath.Join(dir, DefaultStateFileName),
+		SocketPath: socketPath,
+	}
 }
 
 func Cleanup(session Session) error {

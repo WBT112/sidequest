@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/WBT112/sidequest/internal/commandexec"
 	"github.com/WBT112/sidequest/internal/preflight"
 	"github.com/WBT112/sidequest/internal/session"
 	"github.com/WBT112/sidequest/internal/tmux"
@@ -54,7 +53,7 @@ type App struct {
 	CreateSession  func() (session.Session, error)
 	RunLayout      func(session.Session, session.Command) error
 	ReceiveCommand func(context.Context, string) (session.Command, error)
-	ExecCommand    func(session.Command) error
+	ExecCommand    func(session.Session, session.Command) error
 	Now            func() time.Time
 }
 
@@ -62,7 +61,7 @@ func (a App) Run(args []string) int {
 	if len(args) == 2 && args[0] == commandRunnerMode {
 		if err := a.runCommandRunner(args[1]); err != nil {
 			fmt.Fprintf(a.errorWriter(), "sidequest command runner: %v\n", err)
-			return 127
+			return commandexec.ExitCodeForError(err)
 		}
 		return 0
 	}
@@ -228,20 +227,13 @@ func (a App) runCommandRunner(socketPath string) error {
 	if err != nil {
 		return err
 	}
+	runtimeSession := session.FromSocketPath(socketPath)
 
 	execute := a.ExecCommand
 	if execute == nil {
-		execute = execCommand
+		execute = commandexec.DefaultExecutor().Run
 	}
-	return execute(command)
-}
-
-func execCommand(command session.Command) error {
-	path, err := exec.LookPath(command.Executable)
-	if err != nil {
-		return err
-	}
-	return syscall.Exec(path, append([]string{command.Executable}, command.Arguments...), os.Environ())
+	return execute(runtimeSession, command)
 }
 
 func (a App) now() time.Time {

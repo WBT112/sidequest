@@ -181,18 +181,21 @@ func TestRunCommandRunnerReceivesAndExecsCommand(t *testing.T) {
 	var executed session.Command
 	app := App{
 		ReceiveCommand: func(ctx context.Context, socketPath string) (session.Command, error) {
-			if socketPath != "/tmp/command.sock" {
-				t.Fatalf("socketPath = %q, want %q", socketPath, "/tmp/command.sock")
+			if socketPath != "/tmp/sidequest-1000/session-1/command.sock" {
+				t.Fatalf("socketPath = %q, want %q", socketPath, "/tmp/sidequest-1000/session-1/command.sock")
 			}
 			return session.Command{Executable: "bash", Arguments: []string{"-c", "exit 7"}}, nil
 		},
-		ExecCommand: func(command session.Command) error {
+		ExecCommand: func(runtimeSession session.Session, command session.Command) error {
+			if runtimeSession.ID != "session-1" {
+				t.Fatalf("runtimeSession.ID = %q, want %q", runtimeSession.ID, "session-1")
+			}
 			executed = command
 			return nil
 		},
 	}
 
-	code := app.Run([]string{commandRunnerMode, "/tmp/command.sock"})
+	code := app.Run([]string{commandRunnerMode, "/tmp/sidequest-1000/session-1/command.sock"})
 	if code != 0 {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
