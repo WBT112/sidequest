@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -301,6 +302,43 @@ func TestRunListMarksStaleTmuxMetadata(t *testing.T) {
 	}
 }
 
+func TestRunListDoesNotInspectUnownedTmuxMetadata(t *testing.T) {
+	var out bytes.Buffer
+	checkedTmux := false
+	app := App{
+		Out: &out,
+		Now: time.Now,
+		ListSessions: func() ([]session.Record, error) {
+			return []session.Record{
+				{
+					Session: session.Session{ID: "quiet-fox"},
+					State: session.State{
+						ID:         "quiet-fox",
+						Status:     session.StatusCompleted,
+						CreatedAt:  time.Now(),
+						TmuxSocket: "external-tmux",
+					},
+				},
+			}, nil
+		},
+		TmuxHasSession: func(tmux.Info) bool {
+			checkedTmux = true
+			return true
+		},
+	}
+
+	code := app.Run([]string{"list"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if checkedTmux {
+		t.Fatal("list inspected unowned tmux metadata")
+	}
+	if !strings.Contains(out.String(), "stale") {
+		t.Fatalf("list output = %q, want stale marker", out.String())
+	}
+}
+
 func TestRunAttachValidatesPreflightFirst(t *testing.T) {
 	var stderr bytes.Buffer
 	attachCalled := false
@@ -346,6 +384,133 @@ func TestRunAttachCallsAttachSession(t *testing.T) {
 	}
 }
 
+func TestCleanupClosedSessionRemovesTerminalOwnedSession(t *testing.T) {
+	exitCode := 0
+	record := session.Record{
+		Session: session.Session{ID: "done", Dir: "/tmp/sidequest-1000/done"},
+		State: session.State{
+			Status:     session.StatusCompleted,
+			ExitCode:   &exitCode,
+			TmuxSocket: "sidequest-done",
+		},
+	}
+	closed := ""
+	cleaned := ""
+	app := App{
+		CloseTmux: func(info tmux.Info) error {
+			closed = info.SocketName
+			return nil
+		},
+		CleanupSession: func(runtimeSession session.Session) error {
+			cleaned = runtimeSession.ID
+			return nil
+		},
+	}
+
+	if err := app.cleanupClosedSession(record); err != nil {
+		t.Fatalf("cleanupClosedSession returned error: %v", err)
+	}
+	if closed != "sidequest-done" {
+		t.Fatalf("closed = %q, want sidequest-done", closed)
+	}
+	if cleaned != "done" {
+		t.Fatalf("cleaned = %q, want done", cleaned)
+	}
+}
+
+func TestCleanupClosedSessionPreservesRunningSession(t *testing.T) {
+	called := false
+	app := App{
+		CloseTmux: func(tmux.Info) error {
+			called = true
+			return nil
+		},
+		CleanupSession: func(session.Session) error {
+			called = true
+			return nil
+		},
+	}
+
+	err := app.cleanupClosedSession(session.Record{
+		Session: session.Session{ID: "running"},
+		State:   session.State{Status: session.StatusRunning, TmuxSocket: "sidequest-running"},
+	})
+	if err != nil {
+		t.Fatalf("cleanupClosedSession returned error: %v", err)
+	}
+	if called {
+		t.Fatal("cleanup touched running session")
+	}
+}
+
+func TestCleanupClosedSessionDoesNotCloseUnownedTmuxSocket(t *testing.T) {
+	closed := false
+	cleaned := false
+	app := App{
+		CloseTmux: func(tmux.Info) error {
+			closed = true
+			return nil
+		},
+		CleanupSession: func(session.Session) error {
+			cleaned = true
+			return nil
+		},
+	}
+
+	err := app.cleanupClosedSession(session.Record{
+		Session: session.Session{ID: "done"},
+		State:   session.State{Status: session.StatusCompleted, TmuxSocket: "external-session"},
+	})
+	if err != nil {
+		t.Fatalf("cleanupClosedSession returned error: %v", err)
+	}
+	if closed {
+		t.Fatal("cleanup closed unowned tmux socket")
+	}
+	if !cleaned {
+		t.Fatal("cleanup did not remove Sidequest runtime session")
+	}
+}
+
+func TestCleanupStaleFinishedSessionsRemovesFinishedSessionsWithoutTmux(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("finished")}
+	finished, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create finished returned error: %v", err)
+	}
+	if err := session.UpdateState(finished, time.Now(), func(state *session.State) {
+		state.Status = session.StatusCompleted
+		state.TmuxSocket = "sidequest-finished"
+	}); err != nil {
+		t.Fatalf("UpdateState finished returned error: %v", err)
+	}
+
+	manager.IDGenerator = fixedID("running")
+	running, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create running returned error: %v", err)
+	}
+	if err := session.UpdateState(running, time.Now(), func(state *session.State) {
+		state.Status = session.StatusRunning
+		state.TmuxSocket = "sidequest-running"
+	}); err != nil {
+		t.Fatalf("UpdateState running returned error: %v", err)
+	}
+
+	app := App{TmuxHasSession: func(tmux.Info) bool { return false }}
+	if err := app.cleanupStaleFinishedSessions(manager); err != nil {
+		t.Fatalf("cleanupStaleFinishedSessions returned error: %v", err)
+	}
+
+	if _, err := session.ReadState(finished); !session.IsNotExist(err) {
+		t.Fatalf("finished state error = %v, want not exist", err)
+	}
+	if _, err := session.ReadState(running); err != nil {
+		t.Fatalf("running state was removed: %v", err)
+	}
+}
+
 func equalSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -358,4 +523,10 @@ func equalSlices(a, b []string) bool {
 	}
 
 	return true
+}
+
+func fixedID(id string) func() (string, error) {
+	return func() (string, error) {
+		return id, nil
+	}
 }

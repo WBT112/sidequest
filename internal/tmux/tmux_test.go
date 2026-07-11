@@ -95,6 +95,21 @@ func TestAttachUsesIsolatedServer(t *testing.T) {
 	}
 }
 
+func TestCloseKillsOnlyIsolatedSession(t *testing.T) {
+	runner := &recordingRunner{}
+	layout := Layout{CommandRunner: runner}
+	info := Info{SocketName: "sidequest-abc123", SessionName: "sidequest-abc123"}
+
+	if err := layout.Close(info); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	want := []string{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "kill-session", "-t", "sidequest-abc123"}
+	if !equalStrings(runner.calls[0], want) {
+		t.Fatalf("close call = %#v, want %#v", runner.calls[0], want)
+	}
+}
+
 func TestHasSessionUsesIsolatedServer(t *testing.T) {
 	runner := &recordingRunner{}
 	layout := Layout{CommandRunner: runner}

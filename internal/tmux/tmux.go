@@ -106,11 +106,28 @@ func (l Layout) Attach(info Info) error {
 	}
 	runner := l.CommandRunner
 	if runner == nil {
-		runner = ExecRunner{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+		runner = ExecRunner{}
 	}
 
 	if err := runner.Run(tmuxPath, "-f", "/dev/null", "-L", info.SocketName, "attach-session", "-t", info.SessionName); err != nil {
 		return fmt.Errorf("attach tmux session: %w", err)
+	}
+
+	return nil
+}
+
+func (l Layout) Close(info Info) error {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = ExecRunner{}
+	}
+
+	if err := runner.Run(tmuxPath, "-f", "/dev/null", "-L", info.SocketName, "kill-session", "-t", info.SessionName); err != nil {
+		return fmt.Errorf("close tmux session: %w", err)
 	}
 
 	return nil

@@ -200,6 +200,47 @@ func TestCleanupRemovesSessionRuntimeDirectory(t *testing.T) {
 	}
 }
 
+func TestCleanupFinishedRemovesOnlyTerminalRecordsSelectedAsStale(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := Manager{BaseDir: base, IDGenerator: fixedID("done")}
+	done, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create done returned error: %v", err)
+	}
+	if err := UpdateState(done, time.Now(), func(state *State) {
+		state.Status = StatusCompleted
+	}); err != nil {
+		t.Fatalf("UpdateState done returned error: %v", err)
+	}
+
+	manager.IDGenerator = fixedID("running")
+	running, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create running returned error: %v", err)
+	}
+	if err := UpdateState(running, time.Now(), func(state *State) {
+		state.Status = StatusRunning
+	}); err != nil {
+		t.Fatalf("UpdateState running returned error: %v", err)
+	}
+
+	removed, err := manager.CleanupFinished(func(record Record) bool {
+		return record.Session.ID == "done"
+	})
+	if err != nil {
+		t.Fatalf("CleanupFinished returned error: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if _, err := os.Stat(done.Dir); !IsNotExist(err) {
+		t.Fatalf("done dir stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(running.Dir); err != nil {
+		t.Fatalf("running dir was removed: %v", err)
+	}
+}
+
 func TestUpdateStatePersistsTmuxSocketWithoutCommand(t *testing.T) {
 	manager := Manager{BaseDir: filepath.Join(t.TempDir(), "sidequest"), IDGenerator: fixedID("state-update")}
 	session, err := manager.Create()

@@ -102,9 +102,11 @@ func TestRunWaitsForFirstMoveBeforeStartingSnake(t *testing.T) {
 func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(70, 12)
+	exitCode := 0
+	durationMillis := int64(2500)
 	states := make(chan session.State, 4)
 	states <- session.State{Status: session.StatusRunning}
-	states <- session.State{Status: session.StatusCompleted}
+	states <- session.State{Status: session.StatusCompleted, ExitCode: &exitCode, DurationMillis: &durationMillis}
 
 	shell := Shell{
 		NewScreen: func() (tcell.Screen, error) { return screen, nil },
@@ -125,6 +127,8 @@ func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 	}()
 
 	waitForRenderedText(t, screen, "Command finished. Game area frozen.")
+	waitForRenderedText(t, screen, "Exit code: 0")
+	waitForRenderedText(t, screen, "Runtime: 00:00:03")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
 
 	if err := <-errc; err != nil {

@@ -23,6 +23,7 @@ type Shell struct {
 }
 
 type viewState struct {
+	State        session.State
 	SessionState string
 	Paused       bool
 	Frozen       bool
@@ -76,7 +77,7 @@ func (s Shell) Run(ctx context.Context) error {
 		return err
 	}
 	game := newSnakeGameForScreen(screen)
-	view := viewState{SessionState: state.Status, Frozen: terminalState(state.Status), Game: game}
+	view := viewState{State: state, SessionState: state.Status, Frozen: terminalState(state.Status), Game: game}
 	render(screen, view)
 
 	for {
@@ -119,8 +120,9 @@ func (s Shell) Run(ctx context.Context) error {
 				continue
 			}
 
+			view.State = state
 			view.SessionState = state.Status
-			if terminalState(state.Status) {
+			if session.IsTerminalStatus(state.Status) {
 				view.Frozen = true
 			}
 			render(screen, view)
@@ -183,6 +185,9 @@ func render(screen tcell.Screen, view viewState) {
 		{2, "Score: " + scoreText(view.Game), scoreStyle},
 		{3, controlLine, secondaryStyle},
 	}
+	if session.IsTerminalStatus(view.SessionState) {
+		lines = append(lines, renderLine{4, resultSummary(view.State), secondaryStyle})
+	}
 	if view.Message != "" {
 		lines = append(lines, renderLine{height - 2, view.Message, secondaryStyle})
 	}
@@ -219,10 +224,10 @@ func boardBounds(screen tcell.Screen) (int, int, int, int) {
 	}
 
 	x := 1
-	y := 4
+	y := 5
 	width := screenWidth - 2
 	height := screenHeight - y - 1
-	if screenHeight < 7 {
+	if screenHeight < 8 {
 		y = 1
 		height = screenHeight - 2
 	}
@@ -299,6 +304,46 @@ func scoreText(game *SnakeGame) string {
 	return fmt.Sprintf("%d", game.Score)
 }
 
+func resultSummary(state session.State) string {
+	parts := []string{"Runtime: " + durationText(state.DurationMillis)}
+	if state.ExitCode != nil {
+		parts = append([]string{fmt.Sprintf("Exit code: %d", *state.ExitCode)}, parts...)
+	}
+	if state.ExitSignal != "" {
+		parts = append([]string{"Signal: " + state.ExitSignal}, parts...)
+	}
+	if state.StartError != "" {
+		parts = append([]string{"Start error: " + state.StartError}, parts...)
+	}
+	return joinParts(parts)
+}
+
+func durationText(durationMillis *int64) string {
+	if durationMillis == nil {
+		return "-"
+	}
+	duration := time.Duration(*durationMillis) * time.Millisecond
+	if duration < 0 {
+		duration = 0
+	}
+	total := int64(duration.Round(time.Second).Seconds())
+	hours := total / 3600
+	minutes := (total % 3600) / 60
+	seconds := total % 60
+	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
+}
+
+func joinParts(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	result := parts[0]
+	for _, part := range parts[1:] {
+		result += "  " + part
+	}
+	return result
+}
+
 func drawBox(screen tcell.Screen, x int, y int, width int, height int, style tcell.Style) {
 	if width < 2 || height < 2 {
 		return
@@ -341,12 +386,7 @@ func displayState(state string) string {
 }
 
 func terminalState(state string) bool {
-	switch state {
-	case session.StatusCompleted, session.StatusFailed, session.StatusInterrupted, session.StatusStartFailed:
-		return true
-	default:
-		return false
-	}
+	return session.IsTerminalStatus(state)
 }
 
 func statusColor(state string) tcell.Color {

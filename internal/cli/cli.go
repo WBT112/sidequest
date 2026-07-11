@@ -58,6 +58,8 @@ type App struct {
 	ListSessions   func() ([]session.Record, error)
 	AttachSession  func(string) error
 	TmuxHasSession func(tmux.Info) bool
+	CloseTmux      func(tmux.Info) error
+	CleanupSession func(session.Session) error
 	RunLayout      func(session.Session, session.Command) error
 	ReceiveCommand func(context.Context, string) (session.Command, error)
 	ExecCommand    func(session.Session, session.Command) error
@@ -215,14 +217,22 @@ func (a App) createSession() (session.Session, error) {
 	if a.CreateSession != nil {
 		return a.CreateSession()
 	}
-	return session.DefaultManager().Create()
+	manager := session.DefaultManager()
+	if err := a.cleanupStaleFinishedSessions(manager); err != nil {
+		return session.Session{}, err
+	}
+	return manager.Create()
 }
 
 func (a App) listSessions() ([]session.Record, error) {
 	if a.ListSessions != nil {
 		return a.ListSessions()
 	}
-	return session.DefaultManager().List()
+	manager := session.DefaultManager()
+	if err := a.cleanupStaleFinishedSessions(manager); err != nil {
+		return nil, err
+	}
+	return manager.List()
 }
 
 func (a App) runList() error {
@@ -235,8 +245,11 @@ func (a App) runList() error {
 	for _, record := range records {
 		state := record.State
 		displayState := state.Status
-		if state.TmuxSocket != "" && !a.tmuxHasSession(infoFromRecord(record)) {
-			displayState = "stale"
+		if state.TmuxSocket != "" {
+			info, owned := ownedInfoFromRecord(record)
+			if !owned || !a.tmuxHasSession(info) {
+				displayState = "stale"
+			}
 		}
 
 		startedAt := displayStartTime(state)
@@ -269,12 +282,22 @@ func (a App) runAttach(id string) error {
 		return fmt.Errorf("session %q has no tmux socket metadata; it cannot be attached", id)
 	}
 
-	info := infoFromRecord(record)
+	info, owned := ownedInfoFromRecord(record)
+	if !owned {
+		return fmt.Errorf("session %q has invalid Sidequest tmux metadata", id)
+	}
 	layout := tmux.Layout{}
 	if !a.tmuxHasSession(info) {
 		return fmt.Errorf("session %q is stale: tmux server %q is no longer running", id, info.SocketName)
 	}
-	return layout.Attach(info)
+	if err := layout.Attach(info); err != nil {
+		return err
+	}
+	updatedRecord, err := session.DefaultManager().Find(id)
+	if err != nil {
+		return err
+	}
+	return a.cleanupClosedSession(updatedRecord)
 }
 
 func (a App) tmuxHasSession(info tmux.Info) bool {
@@ -321,7 +344,15 @@ func (a App) runLayout(runtimeSession session.Session, command session.Command) 
 		return err
 	}
 
-	return layout.Attach(info)
+	if err := layout.Attach(info); err != nil {
+		return err
+	}
+
+	state, err := session.ReadState(runtimeSession)
+	if err != nil {
+		return err
+	}
+	return a.cleanupClosedSession(session.Record{Session: runtimeSession, State: state})
 }
 
 func (a App) runCommandRunner(socketPath string) error {
@@ -366,11 +397,58 @@ func (a App) now() time.Time {
 	return time.Now()
 }
 
+func (a App) cleanupStaleFinishedSessions(manager session.Manager) error {
+	_, err := manager.CleanupFinished(func(record session.Record) bool {
+		if record.State.TmuxSocket == "" {
+			return true
+		}
+		info, owned := ownedInfoFromRecord(record)
+		if !owned {
+			return true
+		}
+		return !a.tmuxHasSession(info)
+	})
+	return err
+}
+
+func (a App) cleanupClosedSession(record session.Record) error {
+	if !session.IsTerminalStatus(record.State.Status) {
+		return nil
+	}
+
+	if info, ok := ownedInfoFromRecord(record); ok {
+		if err := a.closeTmux(info); err != nil {
+			return err
+		}
+	}
+	return a.cleanupSession(record.Session)
+}
+
+func (a App) closeTmux(info tmux.Info) error {
+	if a.CloseTmux != nil {
+		return a.CloseTmux(info)
+	}
+	return tmux.Layout{}.Close(info)
+}
+
+func (a App) cleanupSession(runtimeSession session.Session) error {
+	if a.CleanupSession != nil {
+		return a.CleanupSession(runtimeSession)
+	}
+	return session.Cleanup(runtimeSession)
+}
+
 func infoFromRecord(record session.Record) tmux.Info {
 	return tmux.Info{
 		SocketName:  record.State.TmuxSocket,
 		SessionName: "sidequest-" + record.Session.ID,
 	}
+}
+
+func ownedInfoFromRecord(record session.Record) (tmux.Info, bool) {
+	info := infoFromRecord(record)
+	want := "sidequest-" + record.Session.ID
+	return info, info.SocketName == want && info.SessionName == want
 }
 
 func displayStartTime(state session.State) string {

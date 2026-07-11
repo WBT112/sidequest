@@ -145,7 +145,7 @@ func (m Manager) List() ([]Record, error) {
 
 	records := make([]Record, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || !validSessionID(entry.Name()) {
 			continue
 		}
 
@@ -198,6 +198,29 @@ func (m Manager) Find(id string) (Record, error) {
 	}
 
 	return Record{Session: runtimeSession, State: state}, nil
+}
+
+func (m Manager) CleanupFinished(stale func(Record) bool) (int, error) {
+	records, err := m.List()
+	if err != nil {
+		return 0, err
+	}
+
+	removed := 0
+	for _, record := range records {
+		if !IsTerminalStatus(record.State.Status) {
+			continue
+		}
+		if stale != nil && !stale(record) {
+			continue
+		}
+		if err := Cleanup(record.Session); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+
+	return removed, nil
 }
 
 func WriteState(session Session, state State) error {
@@ -346,4 +369,13 @@ func (m Manager) uid() int {
 
 func IsNotExist(err error) bool {
 	return errors.Is(err, os.ErrNotExist)
+}
+
+func IsTerminalStatus(status string) bool {
+	switch status {
+	case StatusCompleted, StatusFailed, StatusInterrupted, StatusStartFailed:
+		return true
+	default:
+		return false
+	}
 }
