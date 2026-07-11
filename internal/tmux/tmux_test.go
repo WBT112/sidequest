@@ -32,9 +32,14 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 	wantPrefixes := [][]string{
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "new-session", "-d", "-s", "sidequest-abc123", "-n", "sidequest"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "status", "off"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-status", "top"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-format", "#{pane_title}"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.0", "-T", "Command - F12 Snake, F10 shell"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "remain-on-exit", "on"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "split-window", "-v", "-l", "10", "-t", "sidequest-abc123:0.0"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.1", "-T", "Snake - arrows/WASD start, F12 back, F10 shell"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F12", "select-pane", "-t", ":.+"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F10", "detach-client"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.0"},
 	}
 
@@ -46,7 +51,7 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 			t.Fatalf("call %d = %#v, want prefix %#v", index, runner.calls[index], want)
 		}
 	}
-	splitCall := runner.calls[3]
+	splitCall := runner.calls[6]
 	splitCommand := splitCall[len(splitCall)-1]
 	if !strings.Contains(splitCommand, "__sidequest-game") {
 		t.Fatalf("split command = %q, want game runner", splitCommand)

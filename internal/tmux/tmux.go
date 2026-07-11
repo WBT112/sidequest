@@ -68,14 +68,29 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("set-option", "-t", info.SessionName, "status", "off"); err != nil {
 		return cleanup(fmt.Errorf("disable tmux status bar: %w", err))
 	}
+	if err := run("set-option", "-t", info.SessionName, "pane-border-status", "top"); err != nil {
+		return cleanup(fmt.Errorf("enable pane titles: %w", err))
+	}
+	if err := run("set-option", "-t", info.SessionName, "pane-border-format", "#{pane_title}"); err != nil {
+		return cleanup(fmt.Errorf("configure pane titles: %w", err))
+	}
+	if err := run("select-pane", "-t", info.SessionName+":0.0", "-T", "Command - F12 Snake, F10 shell"); err != nil {
+		return cleanup(fmt.Errorf("title command pane: %w", err))
+	}
 	if err := run("set-option", "-t", info.SessionName, "remain-on-exit", "on"); err != nil {
 		return cleanup(fmt.Errorf("enable command pane remain-on-exit: %w", err))
 	}
 	if err := run("split-window", "-v", "-l", "10", "-t", info.SessionName+":0.0", shellJoin(gameRunner)); err != nil {
 		return cleanup(fmt.Errorf("create placeholder pane: %w", err))
 	}
+	if err := run("select-pane", "-t", info.SessionName+":0.1", "-T", "Snake - arrows/WASD start, F12 back, F10 shell"); err != nil {
+		return cleanup(fmt.Errorf("title game pane: %w", err))
+	}
 	if err := run("bind-key", "-n", "F12", "select-pane", "-t", ":.+"); err != nil {
 		return cleanup(fmt.Errorf("bind F12 pane switch: %w", err))
+	}
+	if err := run("bind-key", "-n", "F10", "detach-client"); err != nil {
+		return cleanup(fmt.Errorf("bind F10 detach: %w", err))
 	}
 	if err := run("select-pane", "-t", info.SessionName+":0.0"); err != nil {
 		return cleanup(fmt.Errorf("focus command pane: %w", err))

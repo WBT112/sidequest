@@ -27,6 +27,7 @@ type viewState struct {
 	Paused       bool
 	Frozen       bool
 	Message      string
+	Started      bool
 	Game         *SnakeGame
 }
 
@@ -93,7 +94,9 @@ func (s Shell) Run(ctx context.Context) error {
 					render(screen, view)
 				default:
 					if direction, ok := directionFromKey(typed); ok && !view.Frozen && !game.Over {
+						view.Started = true
 						game.ChangeDirection(direction)
+						render(screen, view)
 					}
 				}
 			case *tcell.EventResize:
@@ -104,7 +107,7 @@ func (s Shell) Run(ctx context.Context) error {
 				render(screen, view)
 			}
 		case <-gameTicker.C:
-			if !view.Paused && !view.Frozen && !game.Over {
+			if view.Started && !view.Paused && !view.Frozen && !game.Over {
 				game.Step()
 				render(screen, view)
 			}
@@ -160,15 +163,18 @@ func render(screen tcell.Screen, view viewState) {
 
 	drawBox(screen, 0, 0, width, height, style)
 
-	controlLine := "Arrows/WASD move  P pause/resume  Q leave"
+	controlLine := "F12/Ctrl-b Down focuses game. Arrows/WASD start. F10 shell."
+	if view.Started {
+		controlLine = "Arrows/WASD move  P pause/resume  Q leave  F10 shell"
+	}
 	if view.Paused {
-		controlLine = "Paused  P resume  Q leave"
+		controlLine = "Paused  P resume  Q leave  F10 shell"
 	}
 	if view.Frozen {
-		controlLine = "Command finished. Game area frozen.  Q leave"
+		controlLine = "Command finished. Game area frozen.  Q leave  F10 shell"
 	}
 	if view.Game != nil && view.Game.Over && !view.Frozen {
-		controlLine = "Round over.  Q leave"
+		controlLine = "Round over.  Q leave  F10 shell"
 	}
 
 	lines := []renderLine{
