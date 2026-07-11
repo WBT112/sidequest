@@ -11,7 +11,7 @@ import (
 )
 
 const DefaultPollInterval = 250 * time.Millisecond
-const DefaultGameInterval = 120 * time.Millisecond
+const DefaultGameInterval = 250 * time.Millisecond
 
 type StateReader func() (session.State, error)
 
@@ -93,6 +93,12 @@ func (s Shell) Run(ctx context.Context) error {
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'p' || typed.Rune() == 'P'):
 					view.Paused = !view.Paused
 					render(screen, view)
+				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'r' || typed.Rune() == 'R') && !view.Frozen && game.Over:
+					game = newSnakeGameForScreen(screen)
+					view.Game = game
+					view.Started = false
+					view.Paused = false
+					render(screen, view)
 				default:
 					if direction, ok := directionFromKey(typed); ok && !view.Frozen && !game.Over {
 						view.Started = true
@@ -165,18 +171,18 @@ func render(screen tcell.Screen, view viewState) {
 
 	drawBox(screen, 0, 0, width, height, style)
 
-	controlLine := "F12/Ctrl-b Down focuses game. Arrows/WASD start. F10 shell."
+	controlLine := "F12/Ctrl-b Down focuses game. Arrows/WASD start. F10 detach/list."
 	if view.Started {
-		controlLine = "Arrows/WASD move  P pause/resume  Q leave  F10 shell"
+		controlLine = "Arrows/WASD move  P pause/resume  Q exit/cleanup  F10 detach/list"
 	}
 	if view.Paused {
-		controlLine = "Paused  P resume  Q leave  F10 shell"
+		controlLine = "Paused  P resume  Q exit/cleanup  F10 detach/list"
 	}
 	if view.Frozen {
-		controlLine = "Command finished. Game area frozen.  Q leave  F10 shell"
+		controlLine = "Command finished. Q exit/cleanup  F10 detach/list"
 	}
 	if view.Game != nil && view.Game.Over && !view.Frozen {
-		controlLine = "Round over.  Q leave  F10 shell"
+		controlLine = "Round over. R restart  Q exit/cleanup  F10 detach/list"
 	}
 
 	lines := []renderLine{
@@ -186,17 +192,21 @@ func render(screen tcell.Screen, view viewState) {
 		{3, controlLine, secondaryStyle},
 	}
 	if session.IsTerminalStatus(view.SessionState) {
-		lines = append(lines, renderLine{4, resultSummary(view.State), secondaryStyle})
+		lines = append(lines, renderLine{height - 2, resultSummary(view.State), secondaryStyle})
 	}
 	if view.Message != "" {
-		lines = append(lines, renderLine{height - 2, view.Message, secondaryStyle})
+		y := height - 2
+		if session.IsTerminalStatus(view.SessionState) {
+			y = height - 3
+		}
+		lines = append(lines, renderLine{y, view.Message, secondaryStyle})
 	}
+
+	drawSnake(screen, view.Game, style)
 
 	for _, line := range lines {
 		drawText(screen, 1, line.y, width-2, line.text, line.style)
 	}
-
-	drawSnake(screen, view.Game, style)
 
 	screen.Show()
 }
@@ -224,10 +234,10 @@ func boardBounds(screen tcell.Screen) (int, int, int, int) {
 	}
 
 	x := 1
-	y := 5
+	y := 4
 	width := screenWidth - 2
 	height := screenHeight - y - 1
-	if screenHeight < 8 {
+	if screenHeight < 7 {
 		y = 1
 		height = screenHeight - 2
 	}

@@ -41,7 +41,8 @@ Attach to an existing Sidequest tmux session.
 Switch between the command pane and the game pane.
 .TP
 .B F10
-Detach from the Sidequest tmux session and return to the shell.
+Detach from the Sidequest tmux session and return to the shell. The session stays
+listed for later attach.
 .TP
 .B WASD or arrow keys
 Start and control Snake in the game pane.
@@ -49,8 +50,12 @@ Start and control Snake in the game pane.
 .B P
 Pause or resume the game.
 .TP
+.B R
+Restart Snake after a round over while the command is still running.
+.TP
 .B Q
-Leave the game pane. The command pane is not killed.
+Leave the game pane. The command pane is not killed; finished sessions can then
+be cleaned up.
 .SH REQUIREMENTS
 Sidequest requires Linux and
 .BR tmux (1)

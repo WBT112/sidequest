@@ -13,6 +13,20 @@ sidequest -- docker build .
 sidequest -- cargo build --release
 sidequest -- ansible-playbook upgrade.yml
 
+Try it with a harmless demo workload:
+
+```bash
+sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i"; sleep 1; done'
+```
+
+The upper pane shows visible progress. Switch to the lower pane with `F12`, move
+with the arrow keys or `WASD`, press `R` to restart after a round over, and
+return to your shell with `F10`.
+
+`F10` detaches from tmux and keeps the Sidequest session listed for later attach.
+`Q` leaves the game pane; once the command is finished, Sidequest can clean up
+the session.
+
 Sidequest is meant for the boring middle of long commands: builds, upgrades,
 deployments and scripts that need to stay visible but do not need your constant
 attention.

@@ -101,6 +101,38 @@ func TestRunWaitsForFirstMoveBeforeStartingSnake(t *testing.T) {
 	}
 }
 
+func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(5, 7)
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: 10 * time.Millisecond,
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	waitForRenderedText(t, screen, "R restart")
+
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	waitForMissingRenderedText(t, screen, "Round over")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
 func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(70, 12)
@@ -128,7 +160,7 @@ func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 		errc <- shell.Run(context.Background())
 	}()
 
-	waitForRenderedText(t, screen, "Command finished. Game area frozen.")
+	waitForRenderedText(t, screen, "Command finished. Q exit/cleanup")
 	waitForRenderedText(t, screen, "Exit code: 0")
 	waitForRenderedText(t, screen, "Runtime: 00:00:03")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
@@ -187,6 +219,18 @@ func waitForRenderedText(t *testing.T, screen tcell.SimulationScreen, want strin
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("screen did not contain %q:\n%s", want, screenText(screen))
+}
+
+func waitForMissingRenderedText(t *testing.T, screen tcell.SimulationScreen, unwanted string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !strings.Contains(screenText(screen), unwanted) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("screen still contained %q:\n%s", unwanted, screenText(screen))
 }
 
 func screenText(screen tcell.SimulationScreen) string {
