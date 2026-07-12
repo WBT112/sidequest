@@ -28,8 +28,28 @@ sudo dnf install tmux
 
 ### Quick Install With Curl
 
+Install Sidequest and add `$HOME/.local/bin` to your shell startup file:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh -s -- --update-path
+```
+
+Open a new terminal after installation, or run the reload command printed by the
+installer. The installer detects Bash, Zsh and Fish and falls back to
+`$HOME/.profile` for other shells. Reinstalling does not add the PATH line again.
+
+To install without changing a shell startup file:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh
+```
+
+Safer inspect-before-run variant:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh
+less install.sh
+sh install.sh --update-path
 ```
 
 The installer downloads the matching GitHub Release archive, verifies
@@ -39,6 +59,10 @@ elsewhere:
 ```bash
 SIDEQUEST_INSTALL_DIR=/usr/local/bin sh install.sh
 ```
+
+`--update-path` is limited to the default `$HOME/.local/bin` destination. For a
+custom installation directory, configure PATH yourself or choose a directory
+that is already on PATH.
 
 ### Debian/Ubuntu Package
 
@@ -64,7 +88,12 @@ PowerShell or `cmd.exe`:
 ```bash
 sudo apt update
 sudo apt install tmux curl ca-certificates
-curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh -s -- --update-path
+```
+
+Open a new WSL terminal and verify the installation:
+
+```bash
 sidequest --version
 ```
 
@@ -83,7 +112,8 @@ command -v sidequest
 sidequest --version
 ```
 
-If `$HOME/.local/bin` is not on `PATH`, add it in your shell profile:
+When the installer was run without `--update-path` and `$HOME/.local/bin` is not
+already on PATH, add this line to your shell startup file:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
