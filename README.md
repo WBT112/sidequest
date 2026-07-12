@@ -9,6 +9,11 @@ Sidequest runs your command in one tmux pane and focuses a small Snake game in a
 The command stays visible, so you can follow what's happening while you play. Now with Boss-Key(F9).
 You also get noticed when the command finishes. And the command output is stored for later review. So you kind of do documentation at the same time.
 
+<p>
+  <img src="docs/snake1.png" alt="Sidequest Snake gameplay" width="49%">
+  <img src="docs/snake2.png" alt="Sidequest Quest mode gameplay" width="49%">
+</p>
+
 ## Contents
 
 - [Installation](#installation)
