@@ -722,19 +722,7 @@ func secondsLeft(deadline time.Time, now time.Time) int {
 }
 
 func freePoint(game *SnakeGame, random RandomSource, extraOccupied []Point) (Point, bool) {
-	occupied := make(map[Point]bool, len(game.Snake)+len(extraOccupied))
-	for index, point := range game.Snake {
-		if index == 0 {
-			continue
-		}
-		occupied[point] = true
-	}
-	for _, point := range extraOccupied {
-		if point.X >= 0 && point.X < game.Width && point.Y >= 0 && point.Y < game.Height {
-			occupied[point] = true
-		}
-	}
-
+	occupied := occupiedCells(game.Width, game.Height, game.Snake, extraOccupied)
 	distances := reachableDistances(game.Width, game.Height, game.Snake[0], occupied)
 	preferred := FoodRangeForHeat(game.FoodHeat)
 	available := make([]Point, 0, len(distances))

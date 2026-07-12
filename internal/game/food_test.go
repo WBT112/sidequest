@@ -54,6 +54,16 @@ func TestSelectReachableFoodHandlesFullBoard(t *testing.T) {
 	}
 }
 
+func TestSelectReachableFoodTreatsExtraOccupiedCellsAsBlocked(t *testing.T) {
+	snake := []Point{{X: 0, Y: 0}}
+	extraOccupied := []Point{{X: 1, Y: 0}}
+
+	point, ok := SelectReachableFood(2, 1, snake, extraOccupied, 1, func(int) int { return 0 })
+	if ok {
+		t.Fatalf("SelectReachableFood = %#v,true; want false because only free cell is extra occupied", point)
+	}
+}
+
 func TestSelectReachableFoodIsDeterministicWithInjectedRandom(t *testing.T) {
 	snake := []Point{{X: 0, Y: 0}}
 

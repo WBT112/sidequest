@@ -24,19 +24,7 @@ func SelectReachableFood(width int, height int, snake []Point, extraOccupied []P
 		randomInt = func(int) int { return 0 }
 	}
 
-	occupied := make(map[Point]bool, len(snake)+len(extraOccupied))
-	for index, point := range snake {
-		if index == 0 {
-			continue
-		}
-		occupied[point] = true
-	}
-	for _, point := range extraOccupied {
-		if point.X >= 0 && point.X < width && point.Y >= 0 && point.Y < height {
-			occupied[point] = true
-		}
-	}
-
+	occupied := occupiedCells(width, height, snake, extraOccupied)
 	distances := reachableDistances(width, height, snake[0], occupied)
 	preferred := FoodRangeForHeat(heatLevel)
 	candidates := make([]Point, 0, len(distances))
@@ -65,6 +53,28 @@ func SelectReachableFood(width int, height int, snake []Point, extraOccupied []P
 		index = len(candidates) - 1
 	}
 	return candidates[index], true
+}
+
+func occupiedCells(width int, height int, snake []Point, extraOccupied []Point) map[Point]bool {
+	occupied := make(map[Point]bool, len(snake)+len(extraOccupied))
+	for index, point := range snake {
+		if index == 0 {
+			continue
+		}
+		if pointInBounds(point, width, height) {
+			occupied[point] = true
+		}
+	}
+	for _, point := range extraOccupied {
+		if pointInBounds(point, width, height) {
+			occupied[point] = true
+		}
+	}
+	return occupied
+}
+
+func pointInBounds(point Point, width int, height int) bool {
+	return point.X >= 0 && point.X < width && point.Y >= 0 && point.Y < height
 }
 
 func reachableDistances(width int, height int, start Point, occupied map[Point]bool) map[Point]int {
