@@ -457,13 +457,67 @@ func (q *QuestState) spawnPickup(game *SnakeGame, now time.Time) bool {
 }
 
 func (q *QuestState) ResizePickup(game *SnakeGame) {
+	q.ResizeObjects(game)
+}
+
+func (q *QuestState) ResizeObjects(game *SnakeGame) {
+	if !q.Enabled() {
+		return
+	}
+	q.resizeGolden(game)
+	q.resizePickup(game)
+}
+
+func (q *QuestState) resizeGolden(game *SnakeGame) {
+	if !q.Enabled() || !q.Golden.Active {
+		return
+	}
+	point := q.Golden.Position
+	extraOccupied := []Point{game.Food}
+	if q.Pickup.Active {
+		extraOccupied = append(extraOccupied, q.Pickup.Position)
+	}
+	if objectPointValid(game, point, extraOccupied) {
+		return
+	}
+	next, ok := freePoint(game, q.Rand, extraOccupied)
+	if !ok {
+		q.Golden.Active = false
+		return
+	}
+	q.Golden.Position = next
+}
+
+func (q *QuestState) resizePickup(game *SnakeGame) {
 	if !q.Enabled() || !q.Pickup.Active {
 		return
 	}
 	point := q.Pickup.Position
-	if point.X < 0 || point.X >= game.Width || point.Y < 0 || point.Y >= game.Height || game.Occupies(point) || point == game.Food || (q.Golden.Active && point == q.Golden.Position) {
-		q.Pickup = UpgradePickup{}
+	extraOccupied := []Point{game.Food}
+	if q.Golden.Active {
+		extraOccupied = append(extraOccupied, q.Golden.Position)
 	}
+	if objectPointValid(game, point, extraOccupied) {
+		return
+	}
+	next, ok := freePoint(game, q.Rand, extraOccupied)
+	if !ok {
+		q.Pickup = UpgradePickup{}
+		return
+	}
+	q.Pickup.Position = next
+}
+
+func objectPointValid(game *SnakeGame, point Point, extraOccupied []Point) bool {
+	if point.X < 0 || point.X >= game.Width || point.Y < 0 || point.Y >= game.Height || game.Occupies(point) {
+		return false
+	}
+	for _, occupied := range extraOccupied {
+		if point == occupied {
+			return false
+		}
+	}
+	return true
 }
 
 func (q *QuestState) expireEffects(now time.Time) {

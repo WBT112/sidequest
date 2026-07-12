@@ -29,12 +29,29 @@ type Layout struct {
 	CommandRunner Runner
 }
 
+type BossState struct {
+	Hidden            bool
+	PreviousGameFocus bool
+}
+
 type Info struct {
 	SocketName  string
 	SessionName string
 }
 
 const commandPaneHistoryLimit = 100000
+
+const (
+	bossHiddenOption    = "@sidequest_boss_hidden"
+	bossPrevGameOption  = "@sidequest_boss_prev_game"
+	bossContinueMessage = "F9 Continue"
+)
+
+const (
+	paneBorderStatus      = "top"
+	paneBorderStyle       = "fg=colour244"
+	paneActiveBorderStyle = "fg=brightwhite,bold"
+)
 
 func (l Layout) Start(runtimeSession session.Session, commandRunner []string, gameRunner []string) (Info, error) {
 	if len(commandRunner) == 0 {
@@ -78,13 +95,19 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("set-option", "-t", info.SessionName, "history-limit", fmt.Sprintf("%d", commandPaneHistoryLimit)); err != nil {
 		return cleanup(fmt.Errorf("set command pane history limit: %w", err))
 	}
-	if err := run("set-option", "-t", info.SessionName, "pane-border-status", "top"); err != nil {
+	if err := run("set-option", "-t", info.SessionName, "pane-border-status", paneBorderStatus); err != nil {
 		return cleanup(fmt.Errorf("enable pane titles: %w", err))
 	}
-	if err := run("set-option", "-t", info.SessionName, "pane-border-format", "#{pane_title}"); err != nil {
+	if err := run("set-option", "-t", info.SessionName, "pane-border-format", paneBorderFormat()); err != nil {
 		return cleanup(fmt.Errorf("configure pane titles: %w", err))
 	}
-	if err := run("select-pane", "-t", info.SessionName+":0.0", "-T", "Command - F12 Snake, F10 shell"); err != nil {
+	if err := run("set-option", "-t", info.SessionName, "pane-border-style", paneBorderStyle); err != nil {
+		return cleanup(fmt.Errorf("configure inactive pane border style: %w", err))
+	}
+	if err := run("set-option", "-t", info.SessionName, "pane-active-border-style", paneActiveBorderStyle); err != nil {
+		return cleanup(fmt.Errorf("configure active pane border style: %w", err))
+	}
+	if err := run("select-pane", "-t", info.SessionName+":0.0", "-T", "Command - F9 hide, F12 Snake, F10 shell"); err != nil {
 		return cleanup(fmt.Errorf("title command pane: %w", err))
 	}
 	if err := run("set-option", "-t", info.SessionName, "remain-on-exit", "on"); err != nil {
@@ -93,7 +116,7 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("split-window", "-v", "-l", "16", "-t", info.SessionName+":0.0", shellJoin(gameRunner)); err != nil {
 		return cleanup(fmt.Errorf("create placeholder pane: %w", err))
 	}
-	gamePaneTitle := "Snake - arrows/WASD, R restart, F12 Command, F10 shell"
+	gamePaneTitle := "Snake - arrows/WASD, F9 hide, F12 Command, F10 shell"
 	if outputRunner, ok := runner.(OutputRunner); ok {
 		gamePaneTitle = centeredPaneTitle(outputRunner, tmuxPath, baseArgs, info.SessionName+":0.1", gamePaneTitle)
 	}
@@ -106,11 +129,39 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("bind-key", "-n", "F10", "detach-client"); err != nil {
 		return cleanup(fmt.Errorf("bind F10 detach: %w", err))
 	}
+	if err := run("bind-key", "-n", "F9", "if-shell", "-F", "#{==:#{"+bossHiddenOption+"},1}", bossRestoreCommand(info), bossHideCommand(info)); err != nil {
+		return cleanup(fmt.Errorf("bind F9 boss key: %w", err))
+	}
 	if err := run("select-pane", "-t", info.SessionName+":0.1"); err != nil {
 		return cleanup(fmt.Errorf("focus game pane: %w", err))
 	}
 
 	return info, nil
+}
+
+func bossHideCommand(info Info) string {
+	return strings.Join([]string{
+		fmt.Sprintf("if-shell -F '#{==:#{pane_index},1}' 'set-option -q -t %s %s 1' 'set-option -q -t %s %s 0'", info.SessionName, bossPrevGameOption, info.SessionName, bossPrevGameOption),
+		fmt.Sprintf("set-option -q -t %s pane-border-status off", info.SessionName),
+		fmt.Sprintf("select-pane -t %s:0.0", info.SessionName),
+		fmt.Sprintf("if-shell -F '#{window_zoomed_flag}' '' 'resize-pane -Z -t %s:0.0'", info.SessionName),
+		fmt.Sprintf("display-message -d 1500 '%s'", bossContinueMessage),
+		fmt.Sprintf("set-option -q -t %s %s 1", info.SessionName, bossHiddenOption),
+	}, " ; ")
+}
+
+func bossRestoreCommand(info Info) string {
+	return strings.Join([]string{
+		fmt.Sprintf("if-shell -F '#{window_zoomed_flag}' 'resize-pane -Z -t %s:0.0' ''", info.SessionName),
+		fmt.Sprintf("set-option -q -t %s pane-border-status %s", info.SessionName, paneBorderStatus),
+		fmt.Sprintf("set-option -q -t %s pane-border-format '%s'", info.SessionName, paneBorderFormat()),
+		fmt.Sprintf("if-shell -F '#{==:#{%s},1}' 'select-pane -t %s:0.1' 'select-pane -t %s:0.0'", bossPrevGameOption, info.SessionName, info.SessionName),
+		fmt.Sprintf("set-option -q -t %s %s 0", info.SessionName, bossHiddenOption),
+	}, " ; ")
+}
+
+func paneBorderFormat() string {
+	return "#{?pane_active,#[bold]#[reverse] ▶ #{pane_title} - #{?#{==:#{pane_index},0},INPUT ACTIVE,CONTROLS ACTIVE} #[default],#[dim]   #{pane_title} - #{?#{==:#{pane_index},0},RUNNING,PAUSED} #[default]}"
 }
 
 func (l Layout) Attach(info Info) error {
@@ -147,7 +198,7 @@ func (l Layout) Close(info Info) error {
 	return nil
 }
 
-func (l Layout) CloseGamePane(info Info) error {
+func (l Layout) BossState(info Info) (BossState, error) {
 	tmuxPath := l.TmuxPath
 	if tmuxPath == "" {
 		tmuxPath = "tmux"
@@ -156,15 +207,31 @@ func (l Layout) CloseGamePane(info Info) error {
 	if runner == nil {
 		runner = quietRunner()
 	}
-
-	if err := runner.Run(tmuxPath, "-f", "/dev/null", "-L", info.SocketName, "select-pane", "-t", info.SessionName+":0.0"); err != nil {
-		return fmt.Errorf("focus command pane: %w", err)
-	}
-	if err := runner.Run(tmuxPath, "-f", "/dev/null", "-L", info.SocketName, "kill-pane", "-t", info.SessionName+":0.1"); err != nil {
-		return fmt.Errorf("close game pane: %w", err)
+	outputRunner, ok := runner.(OutputRunner)
+	if !ok {
+		return BossState{}, fmt.Errorf("tmux runner cannot read boss state")
 	}
 
-	return nil
+	output, err := outputRunner.Output(
+		tmuxPath,
+		"-f", "/dev/null",
+		"-L", info.SocketName,
+		"display-message",
+		"-p",
+		"-t", info.SessionName+":0",
+		"#{"+bossHiddenOption+"} #{"+bossPrevGameOption+"} #{window_zoomed_flag}",
+	)
+	if err != nil {
+		return BossState{}, fmt.Errorf("read boss state: %w", err)
+	}
+	fields := strings.Fields(strings.TrimSpace(string(output)))
+	if len(fields) < 3 {
+		return BossState{}, nil
+	}
+	return BossState{
+		Hidden:            fields[0] == "1" && fields[2] == "1",
+		PreviousGameFocus: fields[1] == "1",
+	}, nil
 }
 
 func (l Layout) DetachClients(info Info) error {

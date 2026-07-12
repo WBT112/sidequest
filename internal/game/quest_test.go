@@ -412,17 +412,24 @@ func TestQuestCrashAndCompletionClearRoundEffects(t *testing.T) {
 	}
 }
 
-func TestQuestResizePickupClearsInvalidPosition(t *testing.T) {
+func TestQuestResizeObjectsRelocatesInvalidPickupWithoutTimerReset(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(8, 8, func(int) int { return 0 })
 	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
-	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 7, Y: 7}, ExpiresAt: now.Add(pickupTTL)}
+	expiresAt := now.Add(pickupTTL)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 7, Y: 7}, ExpiresAt: expiresAt}
 
 	game.Resize(2, 2)
-	quest.ResizePickup(game)
+	quest.ResizeObjects(game)
 
-	if quest.Pickup.Active {
-		t.Fatalf("pickup remained active after resize outside board: %#v", quest.Pickup)
+	if !quest.Pickup.Active {
+		t.Fatal("pickup was cleared after resize, want relocated")
+	}
+	if quest.Pickup.ExpiresAt != expiresAt {
+		t.Fatalf("pickup expiry = %s, want preserved %s", quest.Pickup.ExpiresAt, expiresAt)
+	}
+	if quest.Pickup.Position.X < 0 || quest.Pickup.Position.X >= game.Width || quest.Pickup.Position.Y < 0 || quest.Pickup.Position.Y >= game.Height {
+		t.Fatalf("pickup relocated out of bounds: %#v", quest.Pickup.Position)
 	}
 }
 

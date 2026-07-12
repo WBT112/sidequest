@@ -39,3 +39,27 @@ jobs:
 
       - name: Verify formatting produced no changes
         run: git diff --exit-code -- .
+
+  install-qa:
+    name: Install QA (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ubuntu:24.04
+          - debian:stable-slim
+          - fedora:latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Run installer QA in disposable container
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -w /repo \
+            "${{ matrix.image }}" \
+            sh scripts/install-qa.sh

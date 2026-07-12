@@ -1,0 +1,68 @@
+version: 2
+
+project_name: sidequest
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: sidequest
+    main: ./cmd/sidequest
+    binary: sidequest
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: tarballs
+    ids:
+      - sidequest
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - docs/man/sidequest.1
+
+nfpms:
+  - id: packages
+    package_name: sidequest
+    ids:
+      - sidequest
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    vendor: WBT112
+    homepage: https://github.com/WBT112/sidequest
+    maintainer: WBT112
+    description: Play Snake while a long-running terminal command keeps working.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    dependencies:
+      - tmux
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/sidequest/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/sidequest/README.md
+      - src: docs/man/sidequest.1
+        dst: /usr/share/man/man1/sidequest.1
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  github:
+    owner: WBT112
+    name: sidequest
+  extra_files:
+    - glob: install.sh
