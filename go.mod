@@ -1,6 +1,6 @@
 module github.com/WBT112/sidequest
 
-go 1.24.0
+go 1.26.5
 
 require github.com/gdamore/tcell/v2 v2.13.10
 

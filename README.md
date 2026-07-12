@@ -192,6 +192,8 @@ Game statistics and separate Classic/Quest TOP 5 lists are stored locally in
 
 ## Development
 
+Sidequest is built and released with Go `1.26.5`.
+
 Run the normal local quality suite before committing:
 
 ```bash
@@ -209,6 +211,7 @@ Extended checks:
 ```bash
 ./scripts/qa.sh --race
 ./scripts/qa.sh --cover
+./scripts/qa.sh --vuln
 ./scripts/qa.sh --race --cover
 ```
 
