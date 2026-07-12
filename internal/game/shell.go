@@ -90,36 +90,37 @@ type Shell struct {
 }
 
 type viewState struct {
-	State          session.State
-	SessionState   string
-	Pause          PauseState
-	Frozen         bool
-	Message        string
-	Started        bool
-	Game           *SnakeGame
-	CommandHeat    HeatLevel
-	FrozenHeat     HeatLevel
-	HeatFrozen     bool
-	Heat           HeatLevel
-	MaxHeat        int
-	HeatNotice     string
-	NoticeUntil    time.Time
-	RoundStarted   time.Time
-	RoundHeat      int
-	RoundCatchUp   bool
-	Clock          PlayClock
-	GameEpoch      time.Time
-	GameTime       time.Time
-	NextFocusCheck time.Time
-	Quest          *QuestState
-	FinalScore     ScoreBreakdown
-	RoundFinalized bool
-	ResultScore    int
-	Leaderboard    []LeaderboardEntry
-	CurrentRank    int
-	PendingScore   *PendingHighscore
-	StatsMessage   string
-	Completion     CommandCompletionChoice
+	State           session.State
+	SessionState    string
+	Pause           PauseState
+	Frozen          bool
+	Message         string
+	Started         bool
+	Game            *SnakeGame
+	CommandHeat     HeatLevel
+	FrozenHeat      HeatLevel
+	HeatFrozen      bool
+	Heat            HeatLevel
+	MaxHeat         int
+	HeatNotice      string
+	NoticeUntil     time.Time
+	RoundStarted    time.Time
+	RoundHeat       int
+	RoundCatchUp    bool
+	Clock           PlayClock
+	GameEpoch       time.Time
+	GameTime        time.Time
+	NextFocusCheck  time.Time
+	Quest           *QuestState
+	FinalScore      ScoreBreakdown
+	RoundFinalized  bool
+	QuestStatsSaved bool
+	ResultScore     int
+	Leaderboard     []LeaderboardEntry
+	CurrentRank     int
+	PendingScore    *PendingHighscore
+	StatsMessage    string
+	Completion      CommandCompletionChoice
 }
 
 type PendingHighscore struct {
@@ -262,6 +263,13 @@ func (s Shell) Run(ctx context.Context) error {
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'r' || typed.Rune() == 'R') && !view.Frozen && game.Over:
 					now := s.now()
 					updateViewGameTime(&view, now)
+					if view.RoundFinalized && !view.QuestStatsSaved {
+						updateQuestStats(&view, s.statsManager())
+					}
+					statsMessage := ""
+					if !view.QuestStatsSaved {
+						statsMessage = view.StatsMessage
+					}
 					game = newSnakeGameForScreen(screen)
 					view.Game = game
 					view.Started = false
@@ -271,11 +279,13 @@ func (s Shell) Run(ctx context.Context) error {
 					view.RoundHeat = RestartStartHeat(view.CommandHeat.Level)
 					view.RoundCatchUp = view.RoundHeat < view.CommandHeat.Level
 					view.RoundFinalized = false
+					view.QuestStatsSaved = false
 					view.ResultScore = 0
 					view.CurrentRank = 0
 					view.PendingScore = nil
 					view.Leaderboard = nil
 					view.StatsMessage = ""
+					view.Message = statsMessage
 					boardWidth, boardHeight := boardSize(screen)
 					view.Quest = NewQuestState(mode, view.GameTime, s.Random, boardWidth, boardHeight)
 					updateViewHeat(&view, now)
@@ -355,9 +365,9 @@ func (s Shell) Run(ctx context.Context) error {
 				}
 				if game.Over {
 					finalizeRound(&view, s.statsManager())
+					updateQuestStats(&view, s.statsManager())
 					if session.IsTerminalStatus(view.SessionState) {
 						view.Frozen = true
-						updateQuestStats(&view, s.statsManager())
 					}
 				}
 				nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
@@ -522,10 +532,12 @@ func shouldFinalizeCompletionQuit(view *viewState) bool {
 }
 
 func updateQuestStats(view *viewState, manager StatsManager) {
-	if view.Quest.Enabled() && view.RoundFinalized {
+	if view.Quest.Enabled() && view.RoundFinalized && !view.QuestStatsSaved {
 		if _, err := manager.UpdateQuest(view.FinalScore, view.Quest); err != nil {
 			view.StatsMessage = "Stats not saved: " + err.Error()
+			return
 		}
+		view.QuestStatsSaved = true
 	}
 }
 

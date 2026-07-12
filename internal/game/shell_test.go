@@ -344,6 +344,81 @@ func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
+func TestRunSavesQuestStatsBeforeRestartAfterRoundOver(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(5, 7)
+	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning, GameMode: GameModeQuest}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: 10 * time.Millisecond,
+		StatsManager: manager,
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "QUEST:")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	waitForRenderedText(t, screen, "R Restart")
+
+	stats := manager.load()
+	if stats.GamesPlayed != 1 {
+		t.Fatalf("GamesPlayed before restart = %d, want 1", stats.GamesPlayed)
+	}
+
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
+	waitForRenderedText(t, screen, "QUEST:")
+	stats = manager.load()
+	if stats.GamesPlayed != 1 {
+		t.Fatalf("GamesPlayed after restart = %d, want still 1", stats.GamesPlayed)
+	}
+	cancelShell(t, cancel, errc)
+}
+
+func TestRunDoesNotDuplicateQuestStatsWhenCommandCompletesAfterRoundOver(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(5, 7)
+	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+	var finished atomic.Bool
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			if finished.Load() {
+				return session.State{Status: session.StatusCompleted, GameMode: GameModeQuest}, nil
+			}
+			return session.State{Status: session.StatusRunning, GameMode: GameModeQuest}, nil
+		},
+		PollInterval: 20 * time.Millisecond,
+		GameInterval: 10 * time.Millisecond,
+		StatsManager: manager,
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "QUEST:")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	waitForRenderedText(t, screen, "R Restart")
+	if stats := manager.load(); stats.GamesPlayed != 1 {
+		t.Fatalf("GamesPlayed after round over = %d, want 1", stats.GamesPlayed)
+	}
+
+	finished.Store(true)
+	waitForRenderedText(t, screen, "Command state: completed")
+	if stats := manager.load(); stats.GamesPlayed != 1 {
+		t.Fatalf("GamesPlayed after command completion = %d, want still 1", stats.GamesPlayed)
+	}
+	cancelShell(t, cancel, errc)
+}
+
 func TestRunDirectionInputDoesNotPostponeNextMove(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(5, 7)
