@@ -1,10 +1,9 @@
 # sidequest
 
-Play Snake (other games maybe later) while a long-running terminal command keeps working.
+Play Snake (other games maybe later) while a terminal keeps working. Now with Boss-Key(F9)
 
 Sidequest runs your command in one tmux pane and focuses a small Snake game in
-another. The command stays visible, the game starts on your first move, and when
-the command finishes you can keep the same Snake round going.
+another. The command stays visible, so you can follow what's happening while you play. You also get noticed when the command finishes.
 
 ## Installation
 
@@ -189,4 +188,4 @@ Extended checks:
 Sidequest is meant for builds, upgrades, deployments and scripts that should stay
 visible but do not need constant attention. It does not modify the wrapped
 command, replace tmux, hide interactive prompts or act as a full terminal
-emulator.
+emulator. Do not use this on production servers of course.
