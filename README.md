@@ -20,11 +20,61 @@ sidequest -- sudo apt upgrade
 Interactive developer CLIs are treated as one running command, so Snake remains
 available until the tool exits.
 
+Pass an initial task to Claude Code when it should start working immediately:
+
+```bash
+sidequest -- claude "Run the test suite, fix any failures, and summarize the changes."
+```
+
 Try it with a harmless demo workload:
 
 ```bash
 sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i"; sleep 1; done'
 ```
+
+## Shell shortcuts
+
+For a dedicated shortcut, add an alias to the startup file of your shell.
+For Bash, add this to `~/.bashrc`; for Zsh, add it to `~/.zshrc`:
+
+```bash
+alias dbuild='sidequest -- docker build'
+```
+
+Reload the file or open a new terminal:
+
+```bash
+source ~/.bashrc  # use ~/.zshrc for Zsh
+dbuild .
+dbuild --no-cache -t example:dev .
+```
+
+A normal alias cannot transparently replace only the two-word command
+`docker build` while leaving commands such as `docker ps` unchanged. Use a shell
+function for that behavior:
+
+```bash
+docker() {
+    if [ "${1:-}" = "build" ]; then
+        shift
+        sidequest -- docker build "$@"
+    else
+        command docker "$@"
+    fi
+}
+```
+
+Put the function in `~/.bashrc` or `~/.zshrc` and reload the file. Afterwards,
+`docker build ...` starts through Sidequest automatically, while other Docker
+subcommands still call Docker directly:
+
+```bash
+docker build -t example:dev .  # runs through Sidequest
+docker ps                      # runs normally
+```
+
+To disable the wrapper for the current shell, run `unset -f docker`. Remove the
+function from the shell startup file to disable it permanently.
 
 ## Gameplay
 
