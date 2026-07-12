@@ -240,6 +240,21 @@ func TestSnakeRejectsImmediateReverseWhenLongerThanOne(t *testing.T) {
 	}
 }
 
+func TestSnakeCanStartMovingLeft(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Food = Point{X: 0, Y: 0}
+
+	if !game.ChangeDirection(DirectionLeft) {
+		t.Fatal("ChangeDirection(left) returned false for one-segment snake")
+	}
+	if result := game.Step(); result != StepMoved {
+		t.Fatalf("Step result = %v, want moved", result)
+	}
+	if game.Dir != DirectionLeft || game.Snake[0] != (Point{X: 1, Y: 2}) {
+		t.Fatalf("dir=%v head=%#v, want left to 1,2", game.Dir, game.Snake[0])
+	}
+}
+
 func TestSnakeQueuesRapidLeftUpRightTurns(t *testing.T) {
 	game := NewSnakeGame(7, 7, func(int) int { return 0 })
 	game.Snake = []Point{{X: 3, Y: 3}, {X: 4, Y: 3}, {X: 5, Y: 3}}
@@ -299,6 +314,7 @@ func TestSnakeQueuesRapidRightUpLeftTurns(t *testing.T) {
 
 func TestSnakeRejectsDirectReverseDirection(t *testing.T) {
 	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 2}, {X: 1, Y: 2}}
 	game.Dir = DirectionRight
 
 	if game.ChangeDirection(DirectionLeft) {

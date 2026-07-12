@@ -145,7 +145,7 @@ func (g *SnakeGame) ChangeDirection(direction Direction) bool {
 	if len(g.PendingDirs) > 0 {
 		lastDirection = g.PendingDirs[len(g.PendingDirs)-1]
 	}
-	if direction == lastDirection || oppositeDirections(lastDirection, direction) {
+	if direction == lastDirection || ((len(g.Snake) > 1 || len(g.PendingDirs) > 0) && oppositeDirections(lastDirection, direction)) {
 		return false
 	}
 	g.PendingDirs = append(g.PendingDirs, direction)
