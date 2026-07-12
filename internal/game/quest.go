@@ -609,16 +609,16 @@ func (q *QuestState) notice(message string, now time.Time) {
 func (q *QuestState) effectHUDParts(now time.Time) []string {
 	parts := []string{}
 	if q.Shield.Charges > 0 && now.Before(q.Shield.ExpiresAt) {
-		parts = append(parts, fmt.Sprintf("SHIELD %d.%ds", q.Shield.Charges, secondsLeft(q.Shield.ExpiresAt, now)))
+		parts = append(parts, chargedEffectHUDPart("SHIELD", q.Shield.Charges, q.Shield.ExpiresAt, now))
 	}
 	if q.Phase.Charges > 0 && now.Before(q.Phase.ExpiresAt) {
-		parts = append(parts, fmt.Sprintf("PHASE %d.%ds", q.Phase.Charges, secondsLeft(q.Phase.ExpiresAt, now)))
+		parts = append(parts, chargedEffectHUDPart("PHASE", q.Phase.Charges, q.Phase.ExpiresAt, now))
 	}
 	if q.Warp.Charges > 0 && now.Before(q.Warp.ExpiresAt) {
-		parts = append(parts, fmt.Sprintf("WARP %d.%ds", q.Warp.Charges, secondsLeft(q.Warp.ExpiresAt, now)))
+		parts = append(parts, chargedEffectHUDPart("WARP", q.Warp.Charges, q.Warp.ExpiresAt, now))
 	}
 	if q.DoubleCharges > 0 && now.Before(q.DoubleUntil) {
-		parts = append(parts, fmt.Sprintf("DOUBLE %d.%ds", q.DoubleCharges, secondsLeft(q.DoubleUntil, now)))
+		parts = append(parts, chargedEffectHUDPart("DOUBLE", q.DoubleCharges, q.DoubleUntil, now))
 	}
 	if !q.SlowUntil.IsZero() && now.Before(q.SlowUntil) {
 		parts = append(parts, fmt.Sprintf("SLOW %ds", secondsLeft(q.SlowUntil, now)))
@@ -630,6 +630,10 @@ func (q *QuestState) effectHUDParts(now time.Time) []string {
 		parts = append(parts, fmt.Sprintf("TURBO %ds", secondsLeft(q.TurboUntil, now)))
 	}
 	return parts
+}
+
+func chargedEffectHUDPart(label string, charges int, deadline time.Time, now time.Time) string {
+	return fmt.Sprintf("%s x%d %ds", label, charges, secondsLeft(deadline, now))
 }
 
 func (q *QuestState) updateMission(heat HeatLevel, now time.Time, alive bool) {

@@ -1,6 +1,7 @@
 package game
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -296,6 +297,45 @@ func TestQuestTimedEffectsRefreshAndExpire(t *testing.T) {
 	turboQuest.Tick(game, HeatByLevel(1), now.Add(turboDuration))
 	if !turboQuest.TurboUntil.IsZero() {
 		t.Fatal("turbo remained active after timeout")
+	}
+}
+
+func TestQuestEffectHUDPartsSeparatesChargesAndDuration(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Shield = TimedCharge{Charges: 1, ExpiresAt: now.Add(29 * time.Second)}
+	quest.Phase = TimedCharge{Charges: 1, ExpiresAt: now.Add(14 * time.Second)}
+	quest.Warp = TimedCharge{Charges: 1, ExpiresAt: now.Add(22 * time.Second)}
+	quest.DoubleCharges = 3
+	quest.DoubleUntil = now.Add(18 * time.Second)
+
+	got := quest.effectHUDParts(now)
+	want := []string{
+		"SHIELD x1 29s",
+		"PHASE x1 14s",
+		"WARP x1 22s",
+		"DOUBLE x3 18s",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("effectHUDParts = %#v, want %#v", got, want)
+	}
+}
+
+func TestQuestEffectHUDPartsKeepsDurationOnlyEffectsReadable(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.SlowUntil = now.Add(11 * time.Second)
+	quest.ComboKeeperUntil = now.Add(17 * time.Second)
+	quest.TurboUntil = now.Add(9 * time.Second)
+
+	got := quest.effectHUDParts(now)
+	want := []string{
+		"SLOW 11s",
+		"COMBO LOCK 17s",
+		"TURBO 9s",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("effectHUDParts = %#v, want %#v", got, want)
 	}
 }
 
