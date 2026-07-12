@@ -91,12 +91,40 @@ latest_version() {
 	api_url="https://api.github.com/repos/${REPO}/releases/latest"
 	tmp_json="$TMPDIR/latest.json"
 	token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-	if [ "$token" ]; then
-		curl -fsSL -H "Authorization: Bearer $token" "$api_url" -o "$tmp_json" || fail "could not resolve latest release"
-	else
-		curl -fsSL "$api_url" -o "$tmp_json" || fail "could not resolve latest public release; set SIDEQUEST_VERSION to select one explicitly"
+	if ! curl -fsSL "$api_url" -o "$tmp_json"; then
+		if [ "$token" ]; then
+			curl -fsSL -H "Authorization: Bearer $token" "$api_url" -o "$tmp_json" || fail "could not resolve latest release"
+		else
+			fail "could not resolve latest public release; set SIDEQUEST_VERSION to select one explicitly"
+		fi
 	fi
 	sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp_json" | head -n 1
+}
+
+github_auth_allowed() {
+	case "$1" in
+		https://api.github.com/repos/"$REPO"/*|https://github.com/"$REPO"/*)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+download_http() {
+	source_url="$1"
+	destination="$2"
+	need_cmd curl
+	if curl -fsSL "$source_url" -o "$destination"; then
+		return 0
+	fi
+	token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+	if [ "$token" ] && github_auth_allowed "$source_url"; then
+		curl -fsSL -H "Authorization: Bearer $token" "$source_url" -o "$destination" || fail "could not download $source_url"
+		return 0
+	fi
+	fail "could not download $source_url"
 }
 
 download() {
@@ -110,13 +138,7 @@ download() {
 			cp "$source_url" "$destination"
 			;;
 		http://*|https://*)
-			need_cmd curl
-			token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-			if [ "$token" ]; then
-				curl -fsSL -H "Authorization: Bearer $token" "$source_url" -o "$destination"
-			else
-				curl -fsSL "$source_url" -o "$destination"
-			fi
+			download_http "$source_url" "$destination"
 			;;
 		*)
 			fail "unsupported download URL: $source_url"

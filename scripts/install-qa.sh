@@ -113,4 +113,106 @@ if SIDEQUEST_VERSION="$VERSION" SIDEQUEST_DOWNLOAD_BASE_URL="$ASSETS" SIDEQUEST_
 	fail "installer accepted native Windows"
 fi
 
+FAKE_BIN="$TMPDIR/fake-bin"
+mkdir "$FAKE_BIN"
+cat >"$FAKE_BIN/curl" <<'SH'
+#!/usr/bin/env sh
+set -eu
+
+auth=0
+output=
+url=
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-H)
+			shift
+			case "${1:-}" in
+				Authorization:*) auth=1 ;;
+			esac
+			;;
+		-o)
+			shift
+			output="${1:-}"
+			;;
+		-*)
+			;;
+		*)
+			url="$1"
+			;;
+	esac
+	shift
+done
+
+printf '%s auth=%s\n' "$url" "$auth" >>"$FAKE_CURL_LOG"
+if [ "${FAKE_CURL_MODE:-public}" = require-auth ] && [ "$auth" -eq 0 ]; then
+	exit 22
+fi
+
+case "$url" in
+	*/checksums.txt)
+		cp "$FAKE_CURL_ASSETS/checksums.txt" "$output"
+		;;
+	*)
+		cp "$FAKE_CURL_ASSETS/$FAKE_CURL_ASSET" "$output"
+		;;
+esac
+SH
+chmod 755 "$FAKE_BIN/curl"
+
+run_http_install() {
+	log="$1"
+	base_url="$2"
+	curl_mode="$3"
+	token="$4"
+	target_dir="$5"
+	HOME="$HOME_DIR" \
+	SHELL=/bin/bash \
+	SIDEQUEST_VERSION="$VERSION" \
+	SIDEQUEST_DOWNLOAD_BASE_URL="$base_url" \
+	SIDEQUEST_INSTALL_DIR="$target_dir" \
+	SIDEQUEST_TEST_UNAME_S=Linux \
+	SIDEQUEST_TEST_UNAME_M=x86_64 \
+	GITHUB_TOKEN="$token" \
+	FAKE_CURL_ASSETS="$ASSETS" \
+	FAKE_CURL_ASSET="$ASSET" \
+	FAKE_CURL_LOG="$log" \
+	FAKE_CURL_MODE="$curl_mode" \
+	PATH="$FAKE_BIN:/usr/bin:/bin" \
+	sh "$INSTALLER"
+}
+
+github_base="https://github.com/WBT112/sidequest/releases/download/$VERSION"
+public_github_log="$TMPDIR/public-github-curl.log"
+run_http_install "$public_github_log" "$github_base" public "" "$TMPDIR/public-github-bin" >/dev/null
+if grep 'auth=1' "$public_github_log" >/dev/null 2>&1; then
+	fail "public GitHub downloads sent an Authorization header"
+fi
+
+token_public_github_log="$TMPDIR/token-public-github-curl.log"
+run_http_install "$token_public_github_log" "$github_base" public "secret-token" "$TMPDIR/token-public-github-bin" >/dev/null
+if grep 'auth=1' "$token_public_github_log" >/dev/null 2>&1; then
+	fail "public GitHub downloads used a token before authentication was required"
+fi
+
+auth_github_log="$TMPDIR/auth-github-curl.log"
+run_http_install "$auth_github_log" "$github_base" require-auth "secret-token" "$TMPDIR/auth-github-bin" >/dev/null
+if ! grep 'auth=1' "$auth_github_log" >/dev/null 2>&1; then
+	fail "authenticated GitHub fallback did not send an Authorization header"
+fi
+
+external_base="https://downloads.example.test/sidequest/$VERSION"
+external_log="$TMPDIR/external-curl.log"
+run_http_install "$external_log" "$external_base" public "secret-token" "$TMPDIR/external-bin" >/dev/null
+if grep 'auth=1' "$external_log" >/dev/null 2>&1; then
+	fail "non-GitHub downloads received an Authorization header"
+fi
+
+external_auth_log="$TMPDIR/external-auth-curl.log"
+if run_http_install "$external_auth_log" "$external_base" require-auth "secret-token" "$TMPDIR/external-auth-bin" >/dev/null 2>&1; then
+	fail "installer authenticated to a non-GitHub download host"
+fi
+if grep 'auth=1' "$external_auth_log" >/dev/null 2>&1; then
+	fail "non-GitHub authenticated retry sent an Authorization header"
+fi
+
 printf 'install QA passed\n'

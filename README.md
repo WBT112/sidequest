@@ -28,12 +28,16 @@ sudo apt install tmux
 sudo dnf install tmux
 ```
 
-### Quick Install With Curl
+### Install From a Release
 
-Install Sidequest and add `$HOME/.local/bin` to your shell startup file:
+Choose a release tag, download the versioned installer from GitHub Releases,
+inspect it, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh -s -- --update-path
+SIDEQUEST_VERSION=v0.2.0
+curl -fsSLO "https://github.com/WBT112/sidequest/releases/download/${SIDEQUEST_VERSION}/install.sh"
+less install.sh
+sh install.sh --update-path
 ```
 
 Open a new terminal after installation, or run the reload command printed by the
@@ -43,20 +47,20 @@ installer. The installer detects Bash, Zsh and Fish and falls back to
 To install without changing a shell startup file:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh
-```
-
-Safer inspect-before-run variant:
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh
-less install.sh
-sh install.sh --update-path
+sh install.sh
 ```
 
 The installer downloads the matching GitHub Release archive, verifies
-`checksums.txt`, and installs to `$HOME/.local/bin` by default. To install
-elsewhere:
+`checksums.txt`, and installs to `$HOME/.local/bin` by default. Release assets
+also include GitHub artifact attestations. After downloading an artifact, you can
+verify its provenance with:
+
+```bash
+gh attestation verify sidequest_0.2.0_linux_amd64.tar.gz --repo WBT112/sidequest
+gh attestation verify install.sh --repo WBT112/sidequest
+```
+
+To install elsewhere:
 
 ```bash
 SIDEQUEST_INSTALL_DIR=/usr/local/bin sh install.sh
@@ -90,7 +94,10 @@ PowerShell or `cmd.exe`:
 ```bash
 sudo apt update
 sudo apt install tmux curl ca-certificates
-curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh -s -- --update-path
+SIDEQUEST_VERSION=v0.2.0
+curl -fsSLO "https://github.com/WBT112/sidequest/releases/download/${SIDEQUEST_VERSION}/install.sh"
+less install.sh
+sh install.sh --update-path
 ```
 
 Open a new WSL terminal and verify the installation:

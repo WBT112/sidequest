@@ -59,6 +59,8 @@ nfpms:
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+  extra_files:
+    - glob: install.sh
 
 release:
   github:
