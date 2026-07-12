@@ -145,7 +145,7 @@ func (g *SnakeGame) ChangeDirection(direction Direction) bool {
 	if len(g.PendingDirs) > 0 {
 		lastDirection = g.PendingDirs[len(g.PendingDirs)-1]
 	}
-	if direction == lastDirection || oppositeDirections(lastDirection, direction) {
+	if direction == lastDirection || ((len(g.Snake) > 1 || len(g.PendingDirs) > 0) && oppositeDirections(lastDirection, direction)) {
 		return false
 	}
 	g.PendingDirs = append(g.PendingDirs, direction)
@@ -157,6 +157,14 @@ func (g *SnakeGame) ClearPendingDirections() {
 }
 
 func (g *SnakeGame) Step() StepResult {
+	return g.step(false)
+}
+
+func (g *SnakeGame) StepGrow() StepResult {
+	return g.step(true)
+}
+
+func (g *SnakeGame) step(forceGrow bool) StepResult {
 	if g.Over {
 		return StepMoved
 	}
@@ -174,7 +182,7 @@ func (g *SnakeGame) Step() StepResult {
 		return StepHitWall
 	}
 
-	willGrow := next == g.Food
+	willGrow := forceGrow || next == g.Food
 	if g.collidesWithSnake(next, willGrow) {
 		g.Over = true
 		return StepHitSelf
@@ -182,12 +190,14 @@ func (g *SnakeGame) Step() StepResult {
 
 	g.Snake = append([]Point{next}, g.Snake...)
 	if willGrow {
-		foodScore := g.FoodScore
-		if foodScore < 1 {
-			foodScore = 1
+		if !forceGrow {
+			foodScore := g.FoodScore
+			if foodScore < 1 {
+				foodScore = 1
+			}
+			g.Score += foodScore
+			g.PlaceFood()
 		}
-		g.Score += foodScore
-		g.PlaceFood()
 		return StepAteFood
 	}
 
@@ -209,13 +219,29 @@ func (g *SnakeGame) nextDirection() Direction {
 }
 
 func (g *SnakeGame) PlaceFood() bool {
-	if point, ok := SelectReachableFood(g.Width, g.Height, g.Snake, nil, g.FoodHeat, g.randomInt); ok {
+	return g.PlaceFoodExcluding(nil)
+}
+
+func (g *SnakeGame) PlaceFoodExcluding(extraOccupied []Point) bool {
+	if point, ok := SelectReachableFood(g.Width, g.Height, g.Snake, extraOccupied, g.FoodHeat, g.randomInt); ok {
 		g.Food = point
 		return true
 	}
 
 	g.Food = Point{X: -1, Y: -1}
 	return false
+}
+
+func (g *SnakeGame) FoodValid(extraOccupied []Point) bool {
+	if g.Food.X < 0 || g.Food.X >= g.Width || g.Food.Y < 0 || g.Food.Y >= g.Height || g.Occupies(g.Food) {
+		return false
+	}
+	for _, point := range extraOccupied {
+		if g.Food == point {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *SnakeGame) Occupies(point Point) bool {
@@ -228,7 +254,7 @@ func (g *SnakeGame) Occupies(point Point) bool {
 }
 
 func (g *SnakeGame) placeFoodAfterResize() {
-	if g.Food.X >= 0 && g.Food.X < g.Width && g.Food.Y >= 0 && g.Food.Y < g.Height && !g.Occupies(g.Food) {
+	if g.FoodValid(nil) {
 		return
 	}
 	g.PlaceFood()

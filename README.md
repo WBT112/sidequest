@@ -1,15 +1,25 @@
 # sidequest
 
-Play Snake (other games maybe later) while a long-running terminal command keeps working.
+Ever wondered what to do while waiting for an ansible playbook to finish, a build to complete, or a long-running script to finish?
+Ever tried to look busy while you just wait for Codex to do your stuff ?
 
-Sidequest runs your command in one tmux pane and focuses a small Snake game in
-another. The command stays visible, the game starts on your first move, and when
-the command finishes you can keep the same Snake round going.
+Look no further!
+
+Sidequest runs your command in one tmux pane and focuses a small Snake game in another.
+The command stays visible, so you can follow what's happening while you play. Now with Boss-Key(F9).
+You also get noticed when the command finishes. And the command output is stored for later review. So you kind of do documentation at the same time.
+
+![Sidequest Snake gameplay](docs/snake1.png)
+
+## Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Gameplay](#gameplay)
 
 ## Installation
 
-Sidequest currently supports Linux `amd64` and `arm64`. Windows users should run
-Sidequest inside WSL 2. Native macOS is not supported yet.
+Sidequest currently supports Linux `amd64` and `arm64`. Windows users should run Sidequest inside WSL 2.
 
 Sidequest requires `tmux` at runtime:
 
@@ -91,12 +101,6 @@ sidequest --version
 
 PATH setup happens inside WSL, not in the Windows PATH.
 
-### macOS
-
-Native macOS is not supported yet. The application currently validates Linux
-terminals only, and release artifacts are built for Linux. macOS support needs a
-dedicated tmux/preflight test matrix before it is advertised.
-
 ### Build From Source
 
 ```bash
@@ -120,11 +124,11 @@ export PATH="$HOME/.local/bin:$PATH"
 ## Quick Start
 
 ```bash
+sidequest -- ssh deploy@example.com
+sidequest -- sh -c 'sudo du -xh /var /usr /home 2>/dev/null | sort -h'
+sidequest --mode quest -- make test
 sidequest -- codex
 sidequest -- claude "Run the test suite, fix any failures, and summarize the changes."
-sidequest -- gemini
-sidequest -- aider --message "Refactor the parser and run tests."
-sidequest --mode quest -- make test
 ```
 
 Try it with a harmless demo workload:
@@ -186,11 +190,9 @@ still contain sensitive data.
 Game statistics and separate Classic/Quest TOP 5 lists are stored locally in
 `${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json`.
 
-## Requirements
-
-Sidequest targets Linux terminals and requires `tmux` in `PATH`.
-
 ## Development
+
+Sidequest is built and released with Go `1.26.5`.
 
 Run the normal local quality suite before committing:
 
@@ -209,6 +211,7 @@ Extended checks:
 ```bash
 ./scripts/qa.sh --race
 ./scripts/qa.sh --cover
+./scripts/qa.sh --vuln
 ./scripts/qa.sh --race --cover
 ```
 
@@ -217,4 +220,4 @@ Extended checks:
 Sidequest is meant for builds, upgrades, deployments and scripts that should stay
 visible but do not need constant attention. It does not modify the wrapped
 command, replace tmux, hide interactive prompts or act as a full terminal
-emulator.
+emulator. Do not use this on production servers of course. I try to make Sidequest as safe as possible, but it is still a game and may have bugs. Use at your own risk.
