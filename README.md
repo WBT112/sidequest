@@ -20,8 +20,6 @@ sudo dnf install tmux
 
 ### Quick Install With Curl
 
-Use this only after the repository and releases are public:
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh
 ```
@@ -41,19 +39,6 @@ elsewhere:
 ```bash
 SIDEQUEST_INSTALL_DIR=/usr/local/bin sh install.sh
 ```
-
-### Private Repository Installation
-
-While this repository is private, use an authenticated GitHub path:
-
-```bash
-gh auth login
-gh release download v0.1.0 --repo WBT112/sidequest --pattern 'sidequest_*_linux_amd64.tar.gz'
-gh release download v0.1.0 --repo WBT112/sidequest --pattern checksums.txt
-```
-
-Token-based downloads are supported by `install.sh` through `GITHUB_TOKEN` or
-`GH_TOKEN`, but avoid placing tokens directly in shell history.
 
 ### Debian/Ubuntu Package
 
@@ -83,9 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | 
 sidequest --version
 ```
 
-If the repository is still private, replace the anonymous curl step with the
-authenticated GitHub installation path above. PATH setup happens inside WSL, not
-in the Windows PATH.
+PATH setup happens inside WSL, not in the Windows PATH.
 
 ### macOS
 
