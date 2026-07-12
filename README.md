@@ -10,12 +10,15 @@ TOP 5.
 ## Quick Start
 
 ```bash
-sidequest -- sudo apt upgrade
+sidequest -- codex
+sidequest -- claude
 sidequest -- docker build .
-sidequest -- cargo build --release
-sidequest -- ansible-playbook upgrade.yml
 sidequest --mode quest -- make test
+sidequest -- sudo apt upgrade
 ```
+
+Interactive developer CLIs are treated as one running command, so Snake remains
+available until the tool exits.
 
 Try it with a harmless demo workload:
 
