@@ -311,10 +311,11 @@ func (q *QuestState) TryCollisionEffects(game *SnakeGame, result StepResult, now
 	if q.Shield.Charges > 0 && now.Before(q.Shield.ExpiresAt) {
 		q.Shield = TimedCharge{}
 		game.Recover()
+		q.EnsureFood(game)
 		q.notice("SHIELD USED", now)
 		return StepMoved
 	}
-	if q.Warp.Charges > 0 && now.Before(q.Warp.ExpiresAt) && game.WarpToFreePoint(q.Rand, []Point{game.Food, q.Golden.Position, q.Pickup.Position}) {
+	if q.Warp.Charges > 0 && now.Before(q.Warp.ExpiresAt) && game.WarpToFreePoint(q.Rand, append([]Point{game.Food}, q.ActiveObjectPoints()...)) {
 		q.Warp = TimedCharge{}
 		q.notice("WARP USED", now)
 		return StepMoved
@@ -328,6 +329,7 @@ func (q *QuestState) TryShieldRecovery(game *SnakeGame) bool {
 	}
 	q.Shield = TimedCharge{}
 	game.Recover()
+	q.EnsureFood(game)
 	return true
 }
 
@@ -466,6 +468,32 @@ func (q *QuestState) ResizeObjects(game *SnakeGame) {
 	}
 	q.resizeGolden(game)
 	q.resizePickup(game)
+	q.EnsureFood(game)
+}
+
+func (q *QuestState) EnsureFood(game *SnakeGame) bool {
+	if !q.Enabled() {
+		return game.FoodValid(nil)
+	}
+	extraOccupied := q.ActiveObjectPoints()
+	if game.FoodValid(extraOccupied) {
+		return true
+	}
+	return game.PlaceFoodExcluding(extraOccupied)
+}
+
+func (q *QuestState) ActiveObjectPoints() []Point {
+	if !q.Enabled() {
+		return nil
+	}
+	points := make([]Point, 0, 2)
+	if q.Golden.Active {
+		points = append(points, q.Golden.Position)
+	}
+	if q.Pickup.Active {
+		points = append(points, q.Pickup.Position)
+	}
+	return points
 }
 
 func (q *QuestState) resizeGolden(game *SnakeGame) {

@@ -433,6 +433,73 @@ func TestQuestResizeObjectsRelocatesInvalidPickupWithoutTimerReset(t *testing.T)
 	}
 }
 
+func TestQuestFoodPlacementExcludesActivePickup(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 2}, {X: 1, Y: 2}}
+	game.Food = Point{X: 3, Y: 2}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 5, 5)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: game.Food, ExpiresAt: now.Add(pickupTTL)}
+
+	if !quest.EnsureFood(game) {
+		t.Fatal("EnsureFood returned false")
+	}
+	if game.Food == quest.Pickup.Position {
+		t.Fatalf("food remained on pickup at %#v", game.Food)
+	}
+}
+
+func TestQuestFoodPlacementExcludesActiveGoldenByte(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 2}, {X: 1, Y: 2}}
+	game.Food = Point{X: 3, Y: 2}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 5, 5)
+	quest.Golden = GoldenByte{Active: true, Position: game.Food, ExpiresAt: now.Add(goldenByteTTL)}
+
+	if !quest.EnsureFood(game) {
+		t.Fatal("EnsureFood returned false")
+	}
+	if game.Food == quest.Golden.Position {
+		t.Fatalf("food remained on Golden Byte at %#v", game.Food)
+	}
+}
+
+func TestQuestFoodPlacementExcludesPickupAndGoldenByte(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(3, 2, func(int) int { return 0 })
+	game.Snake = []Point{{X: 1, Y: 0}, {X: 0, Y: 0}, {X: 0, Y: 1}}
+	game.Food = Point{X: 1, Y: 1}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 3, 2)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+	quest.Golden = GoldenByte{Active: true, Position: Point{X: 2, Y: 1}, ExpiresAt: now.Add(goldenByteTTL)}
+
+	if !quest.EnsureFood(game) {
+		t.Fatal("EnsureFood returned false on nearly full board")
+	}
+	if game.Food == quest.Pickup.Position || game.Food == quest.Golden.Position {
+		t.Fatalf("food placed on quest object at %#v", game.Food)
+	}
+	if game.Food != (Point{X: 2, Y: 0}) {
+		t.Fatalf("Food = %#v, want only reachable free cell 2,0", game.Food)
+	}
+}
+
+func TestQuestResizeObjectsKeepsFoodDistinctFromQuestObjects(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 2}, {X: 1, Y: 2}}
+	game.Food = Point{X: 3, Y: 2}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 5, 5)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: game.Food, ExpiresAt: now.Add(pickupTTL)}
+
+	quest.ResizeObjects(game)
+
+	if game.Food == quest.Pickup.Position {
+		t.Fatalf("food overlaps pickup after resize handling at %#v", game.Food)
+	}
+}
+
 func TestStepGameCollectsPickupWithoutBlockingMovement(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(8, 8, func(int) int { return 0 })
@@ -446,6 +513,57 @@ func TestStepGameCollectsPickupWithoutBlockingMovement(t *testing.T) {
 
 	if result != StepMoved || game.Snake[0] != (Point{X: 4, Y: 3}) || quest.Pickup.Active || quest.Shield.Charges != 1 {
 		t.Fatalf("pickup collection result=%v head=%#v pickup=%#v shield=%#v", result, game.Snake[0], quest.Pickup, quest.Shield)
+	}
+}
+
+func TestStepGameCollectsPickupWithoutNormalFoodPointsOnOverlap(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 3}, {X: 2, Y: 3}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 4, Y: 3}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 4, Y: 3}, ExpiresAt: now.Add(pickupTTL)}
+
+	result := stepGame(game, quest, HeatByLevel(1), now)
+
+	if result != StepMoved {
+		t.Fatalf("stepGame result = %v, want pickup-only movement", result)
+	}
+	if game.Score != 0 || quest.BaseScore != 0 || quest.NormalFood != 0 {
+		t.Fatalf("pickup overlap awarded normal food: game score=%d base=%d normal=%d", game.Score, quest.BaseScore, quest.NormalFood)
+	}
+	if quest.Pickup.Active || quest.Shield.Charges != 1 {
+		t.Fatalf("pickup was not collected correctly: pickup=%#v shield=%#v", quest.Pickup, quest.Shield)
+	}
+	if game.Food == game.Snake[0] {
+		t.Fatalf("food remains under snake head at %#v", game.Food)
+	}
+}
+
+func TestStepGameCollectsNormalFoodWithoutConsumingQuestObjects(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 3}, {X: 2, Y: 3}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 4, Y: 3}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 6, Y: 6}, ExpiresAt: now.Add(pickupTTL)}
+	quest.Golden = GoldenByte{Active: true, Position: Point{X: 7, Y: 7}, ExpiresAt: now.Add(goldenByteTTL)}
+
+	result := stepGame(game, quest, HeatByLevel(1), now)
+
+	if result != StepAteFood {
+		t.Fatalf("stepGame result = %v, want normal food", result)
+	}
+	if !quest.Pickup.Active || !quest.Golden.Active {
+		t.Fatalf("normal food consumed quest object: pickup=%#v golden=%#v", quest.Pickup, quest.Golden)
+	}
+	if game.Score != quest.BaseScore || quest.NormalFood != 1 {
+		t.Fatalf("score state mismatch after normal food: game=%d base=%d normal=%d", game.Score, quest.BaseScore, quest.NormalFood)
+	}
+	if game.Food == quest.Pickup.Position || game.Food == quest.Golden.Position {
+		t.Fatalf("respawned food overlaps quest object at %#v", game.Food)
 	}
 }
 

@@ -209,13 +209,29 @@ func (g *SnakeGame) nextDirection() Direction {
 }
 
 func (g *SnakeGame) PlaceFood() bool {
-	if point, ok := SelectReachableFood(g.Width, g.Height, g.Snake, nil, g.FoodHeat, g.randomInt); ok {
+	return g.PlaceFoodExcluding(nil)
+}
+
+func (g *SnakeGame) PlaceFoodExcluding(extraOccupied []Point) bool {
+	if point, ok := SelectReachableFood(g.Width, g.Height, g.Snake, extraOccupied, g.FoodHeat, g.randomInt); ok {
 		g.Food = point
 		return true
 	}
 
 	g.Food = Point{X: -1, Y: -1}
 	return false
+}
+
+func (g *SnakeGame) FoodValid(extraOccupied []Point) bool {
+	if g.Food.X < 0 || g.Food.X >= g.Width || g.Food.Y < 0 || g.Food.Y >= g.Height || g.Occupies(g.Food) {
+		return false
+	}
+	for _, point := range extraOccupied {
+		if g.Food == point {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *SnakeGame) Occupies(point Point) bool {
@@ -228,7 +244,7 @@ func (g *SnakeGame) Occupies(point Point) bool {
 }
 
 func (g *SnakeGame) placeFoodAfterResize() {
-	if g.Food.X >= 0 && g.Food.X < g.Width && g.Food.Y >= 0 && g.Food.Y < g.Height && !g.Occupies(g.Food) {
+	if g.FoodValid(nil) {
 		return
 	}
 	g.PlaceFood()

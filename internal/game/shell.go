@@ -407,9 +407,18 @@ func (s Shell) Run(ctx context.Context) error {
 
 func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time) StepResult {
 	if quest.Enabled() && quest.Pickup.Active && game.NextPoint() == quest.Pickup.Position {
+		overlappedFood := game.Food == quest.Pickup.Position
+		originalFood := game.Food
+		if overlappedFood {
+			game.Food = Point{X: -1, Y: -1}
+		}
 		result := game.Step()
+		if overlappedFood {
+			game.Food = originalFood
+		}
 		if result == StepMoved {
 			quest.OnPickupCollected(game, heat, now)
+			quest.EnsureFood(game)
 		}
 		return result
 	}
@@ -418,12 +427,14 @@ func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time)
 		result := game.Step()
 		if result == StepAteFood {
 			quest.OnGoldenByte(game, heat, now)
+			quest.EnsureFood(game)
 		}
 		return result
 	}
 	result := game.Step()
 	if result == StepAteFood && quest.Enabled() {
 		quest.OnNormalFood(game, heat, now)
+		quest.EnsureFood(game)
 	}
 	if result == StepHitWall || result == StepHitSelf {
 		return quest.TryCollisionEffects(game, result, now)
