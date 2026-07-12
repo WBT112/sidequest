@@ -923,7 +923,8 @@ func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
 	arena := arenaForScreen(screen)
 	boardBackground := tcell.ColorDarkSlateGray
 	foodStyle := baseStyle.Foreground(tcell.ColorYellow).Background(boardBackground).Bold(true)
-	bodyStyle := baseStyle.Foreground(tcell.ColorLimeGreen).Background(boardBackground)
+	bodyStyle := baseStyle.Foreground(tcell.ColorLimeGreen).Background(boardBackground).Bold(true)
+	tailStyle := baseStyle.Foreground(tcell.ColorGreen).Background(boardBackground)
 	headStyle := bodyStyle.Bold(true)
 
 	if game.Food.X >= 0 && game.Food.X < arena.Width && game.Food.Y >= 0 && game.Food.Y < arena.Height {
@@ -939,6 +940,9 @@ func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
 		if index == 0 {
 			cell = "██"
 			style = headStyle
+		} else if index == len(game.Snake)-1 {
+			cell = "▒▒"
+			style = tailStyle
 		}
 		drawCell(screen, arena, point, cell, style)
 	}

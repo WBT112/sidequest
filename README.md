@@ -11,8 +11,6 @@ You also get noticed when the command finishes. And the command output is stored
 
 ![Sidequest Snake gameplay](docs/snake1.png)
 
-![Sidequest Quest mode gameplay](docs/snake2.png)
-
 ## Contents
 
 - [Installation](#installation)
