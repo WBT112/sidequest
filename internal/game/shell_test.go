@@ -127,6 +127,49 @@ func TestRunDisplaysQuestModeHUD(t *testing.T) {
 	}
 }
 
+func TestRenderCentersQuestHUDLines(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	defer screen.Fini()
+
+	width, height := 100, 20
+	screen.SetSize(width, height)
+
+	view := viewState{
+		SessionState: session.StatusRunning,
+		Heat:         HeatByLevel(1),
+		Quest: &QuestState{
+			Mode:            GameModeQuest,
+			Mission:         Mission{ID: MissionGolden2, Label: "Collect 2 Golden Bytes", Target: 2},
+			MissionProgress: 0,
+		},
+	}
+
+	render(screen, view)
+
+	cases := []struct {
+		y    int
+		text string
+	}{
+		{y: 1, text: "Command state: running"},
+		{y: 2, text: "SCORE 0  COMBO x0  HEAT 1 x1.0"},
+		{y: 3, text: "QUEST: Collect 2 Golden Bytes 0/2"},
+	}
+
+	for _, test := range cases {
+		got := rowTextIndex(screen, test.y, test.text)
+		if got < 0 {
+			t.Fatalf("row %d missing %q:\n%s", test.y, test.text, screenText(screen))
+		}
+		want := 1 + ((width - 2 - textDisplayWidth(test.text)) / 2)
+		if got != want {
+			t.Fatalf("row %d start column = %d, want %d for %q", test.y, got, want, test.text)
+		}
+	}
+}
+
 func TestRunUpdatesQuestStatsWhenCommandFinishes(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(80, 12)
@@ -999,6 +1042,44 @@ func screenText(screen tcell.SimulationScreen) string {
 			builder.WriteRune(main)
 		}
 		builder.WriteByte('\n')
+	}
+	return builder.String()
+}
+
+func rowTextIndex(screen tcell.SimulationScreen, row int, text string) int {
+	haystack := []rune(screenRowText(screen, row))
+	needle := []rune(text)
+	if len(needle) == 0 {
+		return 0
+	}
+	for start := 0; start+len(needle) <= len(haystack); start++ {
+		matched := true
+		for offset := range needle {
+			if haystack[start+offset] != needle[offset] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return start
+		}
+	}
+	return -1
+}
+
+func screenRowText(screen tcell.SimulationScreen, row int) string {
+	width, height := screen.Size()
+	if row < 0 || row >= height {
+		return ""
+	}
+	var builder strings.Builder
+	for x := 0; x < width; x++ {
+		main, _, _, _ := screen.GetContent(x, row)
+		if main == 0 {
+			builder.WriteRune(' ')
+			continue
+		}
+		builder.WriteRune(main)
 	}
 	return builder.String()
 }

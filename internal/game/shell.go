@@ -645,20 +645,20 @@ func render(screen tcell.Screen, view viewState) {
 	}
 
 	lines := []renderLine{
-		{0, "Sidequest Snake [" + gameModeLabel(view) + "]", titleStyle},
-		{1, "Command state: " + displayState(view.SessionState), statusStyle},
-		{2, heatScoreLine(view), scoreStyle},
-		{3, controlLine, secondaryStyle},
+		{y: 0, text: "Sidequest Snake [" + gameModeLabel(view) + "]", style: titleStyle, centered: true},
+		{y: 1, text: "Command state: " + displayState(view.SessionState), style: statusStyle, centered: true},
+		{y: 2, text: heatScoreLine(view), style: scoreStyle, centered: true},
+		{y: 3, text: controlLine, style: secondaryStyle, centered: true},
 	}
 	if session.IsTerminalStatus(view.SessionState) {
-		lines = append(lines, renderLine{height - 2, resultSummary(view.State), secondaryStyle})
+		lines = append(lines, renderLine{y: height - 2, text: resultSummary(view.State), style: secondaryStyle})
 	}
 	if view.Message != "" {
 		y := height - 2
 		if session.IsTerminalStatus(view.SessionState) {
 			y = height - 3
 		}
-		lines = append(lines, renderLine{y, view.Message, secondaryStyle})
+		lines = append(lines, renderLine{y: y, text: view.Message, style: secondaryStyle})
 	}
 
 	drawSnake(screen, view.Game, style)
@@ -667,6 +667,10 @@ func render(screen tcell.Screen, view viewState) {
 	drawResultPanel(screen, view, style)
 
 	for _, line := range lines {
+		if line.centered {
+			drawCenteredText(screen, 1, line.y, width-2, line.text, line.style)
+			continue
+		}
 		drawText(screen, 1, line.y, width-2, line.text, line.style)
 	}
 
@@ -674,9 +678,10 @@ func render(screen tcell.Screen, view viewState) {
 }
 
 type renderLine struct {
-	y     int
-	text  string
-	style tcell.Style
+	y        int
+	text     string
+	style    tcell.Style
+	centered bool
 }
 
 func newSnakeGameForScreen(screen tcell.Screen) *SnakeGame {
