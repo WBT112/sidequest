@@ -92,7 +92,7 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("split-window", "-v", "-l", "16", "-t", info.SessionName+":0.0", shellJoin(gameRunner)); err != nil {
 		return cleanup(fmt.Errorf("create placeholder pane: %w", err))
 	}
-	if err := run("select-pane", "-t", info.SessionName+":0.1", "-T", "Snake - arrows/WASD, R restart, F12 back, F10 shell"); err != nil {
+	if err := run("select-pane", "-t", info.SessionName+":0.1", "-T", "Snake - arrows/WASD, R restart, F12 Command, F10 shell"); err != nil {
 		return cleanup(fmt.Errorf("title game pane: %w", err))
 	}
 	if err := run("bind-key", "-n", "F12", "select-pane", "-t", ":.+"); err != nil {

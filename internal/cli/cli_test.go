@@ -587,6 +587,35 @@ func TestRunAttachCallsAttachSession(t *testing.T) {
 	}
 }
 
+func TestPrintReconnectHintForRunningSession(t *testing.T) {
+	var out bytes.Buffer
+	app := App{Out: &out}
+
+	app.printReconnectHint(
+		session.Session{ID: "9d4f5dcd6ad45b93f1f07ebb64d67c9b"},
+		session.State{Status: session.StatusRunning},
+	)
+
+	want := "Reconnect with: sidequest attach 9d4f5dcd6ad45b93f1f07ebb64d67c9b\n"
+	if out.String() != want {
+		t.Fatalf("stdout = %q, want %q", out.String(), want)
+	}
+}
+
+func TestPrintReconnectHintSkipsTerminalSession(t *testing.T) {
+	var out bytes.Buffer
+	app := App{Out: &out}
+
+	app.printReconnectHint(
+		session.Session{ID: "done"},
+		session.State{Status: session.StatusCompleted},
+	)
+
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+}
+
 func TestCleanupClosedSessionRemovesTerminalOwnedSession(t *testing.T) {
 	exitCode := 0
 	record := session.Record{

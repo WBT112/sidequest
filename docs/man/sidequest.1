@@ -38,13 +38,9 @@ The Snake arena is capped, centered in large panes, and rendered with two
 terminal columns per logical cell. Food placement prefers reachable cells within
 the current Heat distance range.
 .PP
-Quest Mode displays combo, mission progress, upgrades and bonuses in the game
-HUD. Upgrade choices use keys
-.BR 1 ,
-.BR 2
-or
-.BR 3
-and pause only Snake movement, not the wrapped command.
+Quest Mode displays combo, mission progress, active pickups and bonuses in the
+game HUD. Random pickups appear directly in the arena and are collected through
+normal Snake movement.
 .PP
 Finished runs keep visible command-pane output locally under
 .IR "${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/" .
@@ -64,8 +60,8 @@ Show the Sidequest version.
 .TP
 .BI \-\-mode " classic|quest"
 Select the Snake mode. Classic keeps Snake with Command Heat only. Quest adds
-combo scoring, Golden Bytes, one mission, upgrade choices, completion bonuses
-and local game statistics.
+combo scoring, Golden Bytes, one mission, random arena pickups, completion
+bonuses and local game statistics.
 .SH COMMANDS
 .TP
 .B list
@@ -94,7 +90,8 @@ Switch between the game pane and the command pane.
 .TP
 .B F10
 Detach from the Sidequest tmux session and return to the shell. The session stays
-listed for later attach.
+listed for later attach. If the command is still running, Sidequest prints the
+attach command after tmux returns to the shell.
 .TP
 .B WASD or arrow keys
 Start and control Snake in the game pane.

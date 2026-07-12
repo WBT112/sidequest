@@ -445,6 +445,7 @@ func (a App) runAttach(id string) error {
 	if err != nil {
 		return err
 	}
+	a.printReconnectHint(updatedRecord.Session, updatedRecord.State)
 	return a.cleanupClosedSession(updatedRecord)
 }
 
@@ -500,6 +501,7 @@ func (a App) runLayout(runtimeSession session.Session, command session.Command) 
 	if err != nil {
 		return err
 	}
+	a.printReconnectHint(runtimeSession, state)
 	return a.cleanupClosedSession(session.Record{Session: runtimeSession, State: state})
 }
 
@@ -609,6 +611,13 @@ func (a App) cleanupClosedSession(record session.Record) error {
 		}
 	}
 	return a.cleanupSession(record.Session)
+}
+
+func (a App) printReconnectHint(runtimeSession session.Session, state session.State) {
+	if session.IsTerminalStatus(state.Status) {
+		return
+	}
+	fmt.Fprintf(a.outputWriter(), "Reconnect with: sidequest attach %s\n", runtimeSession.ID)
 }
 
 func (a App) printStoredRun(run runhistory.Run) {

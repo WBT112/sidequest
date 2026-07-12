@@ -1,18 +1,20 @@
 # sidequest
-Play a tiny terminal game while waiting for a long-running command to finish.
 
-Your computer has a task. So do you.
+Play Snake while a long-running terminal command keeps working.
 
-Sidequest turns terminal waiting time into a small playable break. Your command
-keeps running in the main pane, while Snake is focused in the lower pane and
-starts on your first move. When the command finishes, the game freezes on your
-final score and Sidequest shows the command result.
+Sidequest runs your command in one tmux pane and focuses a small Snake game in
+another. The command stays visible, the game starts on your first move, and when
+the command finishes Sidequest freezes the round with the result.
 
+## Quick Start
+
+```bash
 sidequest -- sudo apt upgrade
 sidequest -- docker build .
 sidequest -- cargo build --release
 sidequest -- ansible-playbook upgrade.yml
 sidequest --mode quest -- make test
+```
 
 Try it with a harmless demo workload:
 
@@ -20,30 +22,37 @@ Try it with a harmless demo workload:
 sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i"; sleep 1; done'
 ```
 
-The upper pane shows visible progress. Move with the arrow keys or `WASD`, press
-`R` to restart after a round over, use `F12` to switch to the command pane, and
-return to your shell with `F10`.
+## Gameplay
 
-Snake uses Command Heat: as the wrapped command keeps running, the Heat level
-rises, Snake moves faster, and food awards a higher score multiplier. Heat is
-capped so long commands stay playable, and restarted rounds ramp back up instead
-of jumping straight to maximum speed.
+- `WASD` or arrow keys move Snake.
+- `F12` switches between Snake and the command pane.
+- `F10` detaches back to your shell. If the command is still running, Sidequest
+  prints the `sidequest attach <id>` command.
+- `R` restarts Snake after a round over while the command keeps running.
+- `Q` leaves the game pane; finished sessions can then be cleaned up.
 
-The Snake arena stays compact even in large panes, renders each logical cell as
-two terminal columns, and places food on reachable cells at sensible distances
-for the current Heat level.
+Classic mode keeps Snake simple and adds Command Heat: the longer the wrapped
+command runs, the faster Snake gets and the more food is worth.
 
-Use `--mode classic` for Snake with Command Heat only, or `--mode quest` for
-Combo scoring, rare Golden Bytes, one mission per command, upgrade choices,
-completion bonuses and local best-score tracking.
+Quest mode adds combo scoring, one mission per command, Golden Bytes, random
+arena pickups, completion bonuses and local best-score tracking.
 
-`F10` detaches from tmux and keeps the Sidequest session listed for later attach.
-`Q` leaves the game pane; once the command is finished, Sidequest can clean up
-the session.
+For complete controls and behavior details, use:
 
-Finished runs keep the visible command-pane output locally so you can inspect it
-after tmux is gone. After cleanup, Sidequest prints the saved output path and the
-matching `sidequest output <run-id>` command in your shell:
+```bash
+man sidequest
+```
+
+## Sessions and History
+
+Runtime sessions:
+
+```bash
+sidequest list
+sidequest attach <session-id>
+```
+
+Stored run history:
 
 ```bash
 sidequest runs
@@ -52,29 +61,21 @@ sidequest output last
 sidequest purge <run-id>
 ```
 
-Run history is stored under
-`${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/`. It only stores visible
-pane output plus result metadata, not the command or argument list. Terminal
-output can still contain sensitive data such as tokens, environment values, file
-contents or application data.
+Finished runs keep visible command-pane output under
+`${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/`. Sidequest stores result
+metadata and pane output, not the command or argument list. Terminal output may
+still contain sensitive data.
 
 Quest statistics are stored locally in
-`${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json`. They contain
-small game counters and achievements only, never command names, arguments,
-output, hostnames, working directories or activity timestamps.
+`${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json`.
 
-Sidequest is meant for the boring middle of long commands: builds, upgrades,
-deployments and scripts that need to stay visible but do not need your constant
-attention.
+## Requirements
 
-Requirements
+Sidequest targets Linux terminals and requires `tmux` in `PATH`.
 
-Sidequest currently targets Linux terminals with tmux available in PATH.
-The initial layout requires an interactive terminal of at least 80 columns by 24 rows.
+## Development
 
-Local QA
-
-Run the complete normal local quality suite before committing:
+Run the normal local quality suite before committing:
 
 ```bash
 ./scripts/qa.sh
@@ -83,19 +84,10 @@ Run the complete normal local quality suite before committing:
 If Go is not available as `go` in `PATH`, point the script at the Go binary:
 
 ```bash
-GO=/tmp/go/bin/go ./scripts/qa.sh
+GO=/usr/local/go/bin/go ./scripts/qa.sh
 ```
 
-The script runs:
-
-```bash
-go fmt ./...
-go vet ./...
-go test ./...
-go build ./...
-```
-
-Extended checks are available when useful:
+Extended checks:
 
 ```bash
 ./scripts/qa.sh --race
@@ -103,24 +95,9 @@ Extended checks are available when useful:
 ./scripts/qa.sh --race --cover
 ```
 
-Pure unit tests do not require tmux or a graphical desktop. Tests that exercise a real tmux server detect whether tmux is installed and skip clearly when it is unavailable.
+## Scope
 
-Goals
-
-Sidequest should be:
-
-simple to start;
-safe to use with arbitrary commands;
-usable through SSH;
-independent of a graphical desktop;
-lightweight and local;
-fun without getting in the way;
-easy to extend with additional games.
-Non-goals
-
-Sidequest is not intended to:
-
-modify the command being executed;
-replace a terminal multiplexer;
-hide interactive prompts;
-become a full terminal emulator.
+Sidequest is meant for builds, upgrades, deployments and scripts that should stay
+visible but do not need constant attention. It does not modify the wrapped
+command, replace tmux, hide interactive prompts or act as a full terminal
+emulator.
