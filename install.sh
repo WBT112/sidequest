@@ -167,11 +167,14 @@ shell_profile() {
 	esac
 }
 
-configure_path() {
+validate_path_update() {
 	[ -n "${HOME:-}" ] || fail "--update-path requires HOME to be set"
 	default_install_dir="$HOME/.local/bin"
 	[ "$INSTALL_DIR" = "$default_install_dir" ] || fail "--update-path is supported only for the default $default_install_dir installation directory"
+}
 
+configure_path() {
+	default_install_dir="$HOME/.local/bin"
 	profile="$(shell_profile)"
 	profile_dir="${profile%/*}"
 	mkdir -p "$profile_dir"
@@ -181,8 +184,14 @@ configure_path() {
 	touch "$profile"
 
 	case "$(shell_name)" in
-		fish) path_line='fish_add_path "$HOME/.local/bin"' ;;
-		*) path_line='export PATH="$HOME/.local/bin:$PATH"' ;;
+		fish)
+			path_line='fish_add_path "$HOME/.local/bin"'
+			reload_command="source \"$profile\""
+			;;
+		*)
+			path_line='export PATH="$HOME/.local/bin:$PATH"'
+			reload_command=". \"$profile\""
+			;;
 	esac
 
 	if grep -F "$path_line" "$profile" >/dev/null 2>&1; then
@@ -191,7 +200,7 @@ configure_path() {
 		printf '\n# Added by Sidequest installer\n%s\n' "$path_line" >>"$profile"
 		printf 'Added %s to PATH in %s\n' "$default_install_dir" "$profile"
 	fi
-	printf 'Open a new terminal or reload the file with:\n  . "%s"\n' "$profile"
+	printf 'Open a new terminal or reload the file with:\n  %s\n' "$reload_command"
 }
 
 install_binary() {
@@ -214,6 +223,9 @@ ARCH="$(detect_arch)"
 
 if [ -z "$INSTALL_DIR" ]; then
 	fail "SIDEQUEST_INSTALL_DIR is empty and HOME is not set"
+fi
+if [ "$UPDATE_PATH" -eq 1 ]; then
+	validate_path_update
 fi
 
 if [ -z "$VERSION" ]; then
