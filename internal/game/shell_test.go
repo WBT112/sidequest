@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -364,6 +365,49 @@ func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
 	}
 }
 
+func TestRunDirectionInputDoesNotPostponeNextMove(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(5, 7)
+	base := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	var nowNanos atomic.Int64
+	nowNanos.Store(base.UnixNano())
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: 100 * time.Millisecond,
+		Now: func() time.Time {
+			return time.Unix(0, nowNanos.Load())
+		},
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	arena := arenaForScreen(screen)
+	nextHead := Point{X: arena.Width / 2, Y: arena.Height/2 + 1}
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModNone))
+	waitForRenderedText(t, screen, "Arrows/WASD move")
+
+	nowNanos.Store(base.Add(90 * time.Millisecond).UnixNano())
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
+	time.Sleep(20 * time.Millisecond)
+	nowNanos.Store(base.Add(105 * time.Millisecond).UnixNano())
+
+	waitForRenderedCell(t, screen, nextHead, tcell.RuneBlock)
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
 func TestRunShowsCenteredResultPanelAfterRoundOver(t *testing.T) {
 	screen := tcell.NewSimulationScreen("UTF-8")
 	screen.SetSize(32, 12)
@@ -533,6 +577,20 @@ func waitForMissingRenderedText(t *testing.T, screen tcell.SimulationScreen, unw
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("screen still contained %q:\n%s", unwanted, screenText(screen))
+}
+
+func waitForRenderedCell(t *testing.T, screen tcell.SimulationScreen, point Point, want rune) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		arena := arenaForScreen(screen)
+		main, _, _, _ := screen.GetContent(arena.CellX(point.X), arena.CellY(point.Y))
+		if main == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("cell %#v did not contain %q:\n%s", point, want, screenText(screen))
 }
 
 func screenText(screen tcell.SimulationScreen) string {

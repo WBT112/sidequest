@@ -148,8 +148,6 @@ func (s Shell) Run(ctx context.Context) error {
 					if direction, ok := directionFromKey(typed); ok && !view.Frozen && !game.Over {
 						view.Started = true
 						game.ChangeDirection(direction)
-						now := s.now()
-						nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, now))
 						render(screen, view)
 					}
 				}

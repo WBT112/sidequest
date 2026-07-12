@@ -1,6 +1,10 @@
 package game
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gdamore/tcell/v2"
+)
 
 func TestSnakeFoodNeverAppearsInsideSnake(t *testing.T) {
 	game := NewSnakeGame(4, 3, func(int) int { return 0 })
@@ -157,10 +161,202 @@ func TestSnakeRejectsImmediateReverseWhenLongerThanOne(t *testing.T) {
 	game.Snake = []Point{{X: 2, Y: 2}, {X: 1, Y: 2}}
 	game.Dir = DirectionRight
 
-	game.ChangeDirection(DirectionLeft)
+	if game.ChangeDirection(DirectionLeft) {
+		t.Fatal("ChangeDirection returned true, want rejected reverse")
+	}
 
 	if game.Dir != DirectionRight {
 		t.Fatalf("Dir = %v, want %v", game.Dir, DirectionRight)
+	}
+}
+
+func TestSnakeQueuesRapidLeftUpRightTurns(t *testing.T) {
+	game := NewSnakeGame(7, 7, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 3}, {X: 4, Y: 3}, {X: 5, Y: 3}}
+	game.Dir = DirectionLeft
+	game.Food = Point{X: 0, Y: 0}
+
+	if !game.ChangeDirection(DirectionUp) {
+		t.Fatal("ChangeDirection(up) returned false, want queued")
+	}
+	if !game.ChangeDirection(DirectionRight) {
+		t.Fatal("ChangeDirection(right) returned false, want queued")
+	}
+	if game.Dir != DirectionLeft {
+		t.Fatalf("Dir changed before movement tick: %v", game.Dir)
+	}
+
+	if result := game.Step(); result != StepMoved {
+		t.Fatalf("first Step result = %v, want moved", result)
+	}
+	if game.Dir != DirectionUp || game.Snake[0] != (Point{X: 3, Y: 2}) {
+		t.Fatalf("first turn dir=%v head=%#v, want up to 3,2", game.Dir, game.Snake[0])
+	}
+	if result := game.Step(); result != StepMoved {
+		t.Fatalf("second Step result = %v, want moved", result)
+	}
+	if game.Dir != DirectionRight || game.Snake[0] != (Point{X: 4, Y: 2}) {
+		t.Fatalf("second turn dir=%v head=%#v, want right to 4,2", game.Dir, game.Snake[0])
+	}
+	if game.Over {
+		t.Fatal("game ended after queued corner turns")
+	}
+}
+
+func TestSnakeQueuesRapidRightUpLeftTurns(t *testing.T) {
+	game := NewSnakeGame(7, 7, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 3}, {X: 2, Y: 3}, {X: 1, Y: 3}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+
+	if !game.ChangeDirection(DirectionUp) {
+		t.Fatal("ChangeDirection(up) returned false, want queued")
+	}
+	if !game.ChangeDirection(DirectionLeft) {
+		t.Fatal("ChangeDirection(left) returned false, want queued")
+	}
+
+	game.Step()
+	game.Step()
+
+	if game.Dir != DirectionLeft || game.Snake[0] != (Point{X: 2, Y: 2}) {
+		t.Fatalf("queued turns ended at dir=%v head=%#v, want left to 2,2", game.Dir, game.Snake[0])
+	}
+	if game.Over {
+		t.Fatal("game ended after queued corner turns")
+	}
+}
+
+func TestSnakeRejectsDirectReverseDirection(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Dir = DirectionRight
+
+	if game.ChangeDirection(DirectionLeft) {
+		t.Fatal("ChangeDirection(left) returned true, want rejected reverse")
+	}
+	if len(game.PendingDirs) != 0 {
+		t.Fatalf("PendingDirs = %v, want empty", game.PendingDirs)
+	}
+}
+
+func TestSnakeValidatesAgainstLastQueuedDirection(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Dir = DirectionLeft
+
+	if !game.ChangeDirection(DirectionUp) {
+		t.Fatal("ChangeDirection(up) returned false, want queued")
+	}
+	if game.ChangeDirection(DirectionDown) {
+		t.Fatal("ChangeDirection(down) returned true, want rejected against queued up")
+	}
+	if got, want := len(game.PendingDirs), 1; got != want {
+		t.Fatalf("len(PendingDirs) = %d, want %d", got, want)
+	}
+	if game.PendingDirs[0] != DirectionUp {
+		t.Fatalf("PendingDirs[0] = %v, want up", game.PendingDirs[0])
+	}
+}
+
+func TestSnakeDirectionQueueCapacityIsBounded(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Dir = DirectionRight
+
+	if !game.ChangeDirection(DirectionUp) || !game.ChangeDirection(DirectionLeft) {
+		t.Fatal("first two direction changes were not queued")
+	}
+	if game.ChangeDirection(DirectionDown) {
+		t.Fatal("third direction change returned true, want capacity rejection")
+	}
+	if got, want := len(game.PendingDirs), directionQueueCapacity; got != want {
+		t.Fatalf("len(PendingDirs) = %d, want %d", got, want)
+	}
+	if game.PendingDirs[0] != DirectionUp || game.PendingDirs[1] != DirectionLeft {
+		t.Fatalf("PendingDirs = %v, want up then left", game.PendingDirs)
+	}
+}
+
+func TestSnakeConsumesOneQueuedDirectionPerStep(t *testing.T) {
+	game := NewSnakeGame(7, 7, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 3}, {X: 2, Y: 3}, {X: 1, Y: 3}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	game.ChangeDirection(DirectionUp)
+	game.ChangeDirection(DirectionLeft)
+
+	game.Step()
+
+	if game.Dir != DirectionUp {
+		t.Fatalf("Dir = %v, want up", game.Dir)
+	}
+	if got, want := len(game.PendingDirs), 1; got != want {
+		t.Fatalf("len(PendingDirs) = %d, want %d", got, want)
+	}
+	if game.PendingDirs[0] != DirectionLeft {
+		t.Fatalf("remaining PendingDirs[0] = %v, want left", game.PendingDirs[0])
+	}
+}
+
+func TestSnakeNextPointUsesNextQueuedDirection(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 2}, {X: 1, Y: 2}}
+	game.Dir = DirectionRight
+	game.ChangeDirection(DirectionUp)
+
+	if got, want := game.NextPoint(), (Point{X: 2, Y: 1}); got != want {
+		t.Fatalf("NextPoint = %#v, want %#v", got, want)
+	}
+}
+
+func TestSnakeLifecycleClearsPendingDirections(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.ChangeDirection(DirectionUp)
+	game.ChangeDirection(DirectionLeft)
+
+	game.Resize(6, 6)
+
+	if len(game.PendingDirs) != 0 {
+		t.Fatalf("Resize left PendingDirs = %v, want empty", game.PendingDirs)
+	}
+
+	game.ChangeDirection(DirectionUp)
+	game.Over = true
+	game.Recover()
+
+	if len(game.PendingDirs) != 0 {
+		t.Fatalf("Recover left PendingDirs = %v, want empty", game.PendingDirs)
+	}
+
+	newGame := NewSnakeGame(5, 5, func(int) int { return 0 })
+	if len(newGame.PendingDirs) != 0 {
+		t.Fatalf("new game PendingDirs = %v, want empty", newGame.PendingDirs)
+	}
+}
+
+func TestDirectionKeysMapToSameDirections(t *testing.T) {
+	tests := []struct {
+		name string
+		key  *tcell.EventKey
+		want Direction
+	}{
+		{name: "w", key: tcell.NewEventKey(tcell.KeyRune, 'w', tcell.ModNone), want: DirectionUp},
+		{name: "up", key: tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone), want: DirectionUp},
+		{name: "d", key: tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone), want: DirectionRight},
+		{name: "right", key: tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone), want: DirectionRight},
+		{name: "s", key: tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModNone), want: DirectionDown},
+		{name: "down", key: tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone), want: DirectionDown},
+		{name: "a", key: tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone), want: DirectionLeft},
+		{name: "left", key: tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone), want: DirectionLeft},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := directionFromKey(test.key)
+			if !ok {
+				t.Fatal("directionFromKey ok = false, want true")
+			}
+			if got != test.want {
+				t.Fatalf("directionFromKey = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

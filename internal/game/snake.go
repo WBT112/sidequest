@@ -19,6 +19,10 @@ const (
 type StepResult int
 
 const (
+	directionQueueCapacity = 2
+)
+
+const (
 	StepMoved StepResult = iota
 	StepAteFood
 	StepHitWall
@@ -26,15 +30,16 @@ const (
 )
 
 type SnakeGame struct {
-	Width     int
-	Height    int
-	Snake     []Point
-	Food      Point
-	Dir       Direction
-	Score     int
-	FoodScore int
-	FoodHeat  int
-	Over      bool
+	Width       int
+	Height      int
+	Snake       []Point
+	Food        Point
+	Dir         Direction
+	PendingDirs []Direction
+	Score       int
+	FoodScore   int
+	FoodHeat    int
+	Over        bool
 
 	randomInt func(int) int
 }
@@ -81,19 +86,30 @@ func (g *SnakeGame) Recover() {
 	g.Over = false
 }
 
-func (g *SnakeGame) ChangeDirection(direction Direction) {
-	if g.Over || direction == g.Dir {
-		return
+func (g *SnakeGame) ChangeDirection(direction Direction) bool {
+	if g.Over || len(g.PendingDirs) >= directionQueueCapacity {
+		return false
 	}
-	if len(g.Snake) > 1 && oppositeDirections(g.Dir, direction) {
-		return
+	lastDirection := g.Dir
+	if len(g.PendingDirs) > 0 {
+		lastDirection = g.PendingDirs[len(g.PendingDirs)-1]
 	}
-	g.Dir = direction
+	if direction == lastDirection || oppositeDirections(lastDirection, direction) {
+		return false
+	}
+	g.PendingDirs = append(g.PendingDirs, direction)
+	return true
 }
 
 func (g *SnakeGame) Step() StepResult {
 	if g.Over {
 		return StepMoved
+	}
+
+	if len(g.PendingDirs) > 0 {
+		g.Dir = g.PendingDirs[0]
+		copy(g.PendingDirs, g.PendingDirs[1:])
+		g.PendingDirs = g.PendingDirs[:len(g.PendingDirs)-1]
 	}
 
 	head := g.Snake[0]
@@ -126,8 +142,15 @@ func (g *SnakeGame) Step() StepResult {
 
 func (g *SnakeGame) NextPoint() Point {
 	head := g.Snake[0]
-	delta := directionDelta(g.Dir)
+	delta := directionDelta(g.nextDirection())
 	return Point{X: head.X + delta.X, Y: head.Y + delta.Y}
+}
+
+func (g *SnakeGame) nextDirection() Direction {
+	if len(g.PendingDirs) > 0 {
+		return g.PendingDirs[0]
+	}
+	return g.Dir
 }
 
 func (g *SnakeGame) PlaceFood() bool {
