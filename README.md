@@ -1,14 +1,15 @@
 # sidequest
 
-Play Snake (other games maybe later) while a terminal keeps working. Now with Boss-Key(F9)
+Ever wondered what to do while waiting for an ansible playbook to finish, a build to complete, or a long-running script to finish?
+Ever tried to look busy while you just wait for Codex to do your stuff ?
 
-Sidequest runs your command in one tmux pane and focuses a small Snake game in
-another. The command stays visible, so you can follow what's happening while you play. You also get noticed when the command finishes.
+Sidequest runs your command in one tmux pane and focuses a small Snake game in another.
+The command stays visible, so you can follow what's happening while you play. Now with Boss-Key(F9).
+You also get noticed when the command finishes. And the command output is also stored for later review.
 
 ## Installation
 
-Sidequest currently supports Linux `amd64` and `arm64`. Windows users should run
-Sidequest inside WSL 2.
+Sidequest currently supports Linux `amd64` and `arm64`. Windows users should run Sidequest inside WSL 2.
 
 Sidequest requires `tmux` at runtime:
 
@@ -21,14 +22,6 @@ sudo dnf install tmux
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh
-```
-
-Safer inspect-before-run variant:
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh
-less install.sh
-sh install.sh
 ```
 
 The installer downloads the matching GitHub Release archive, verifies
