@@ -37,6 +37,11 @@ func TestQuestGoldenByteSpawnCollectAndFullBoard(t *testing.T) {
 	if quest.Golden.Position == game.Food {
 		t.Fatalf("golden byte spawned on normal food at %#v", quest.Golden.Position)
 	}
+	for _, point := range game.Snake {
+		if quest.Golden.Position == point {
+			t.Fatalf("golden byte spawned on snake at %#v", quest.Golden.Position)
+		}
+	}
 	quest.Tick(game, HeatByLevel(1), now.Add(7*time.Second).Add(goldenByteTTL))
 	if quest.Golden.Active {
 		t.Fatal("golden byte remained active after timeout")
@@ -61,6 +66,34 @@ func TestQuestGoldenByteSpawnCollectAndFullBoard(t *testing.T) {
 	}
 }
 
+func TestQuestGoldenByteUsesInjectedRandomSequence(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(4, 4, func(int) int { return 0 })
+	game.Snake = []Point{{X: 1, Y: 1}, {X: 1, Y: 2}}
+	game.Food = Point{X: 0, Y: 0}
+	random := &sequenceRandom{values: []int{0, 0, 1}}
+	quest := NewQuestState(GameModeQuest, now, random, 4, 4)
+
+	quest.NormalFood = 6
+	quest.OnNormalFood(game, HeatByLevel(1), now)
+	if !quest.Golden.Active {
+		t.Fatal("first golden byte did not spawn")
+	}
+	first := quest.Golden.Position
+
+	quest.Golden.Active = false
+	quest.NormalFood = 13
+	quest.OnNormalFood(game, HeatByLevel(1), now.Add(time.Second))
+	if !quest.Golden.Active {
+		t.Fatal("second golden byte did not spawn")
+	}
+	second := quest.Golden.Position
+
+	if first == second {
+		t.Fatalf("golden byte positions = %#v and %#v, want sequence-selected candidates", first, second)
+	}
+}
+
 func TestQuestMissionSelectionProgressAndBonusOnce(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(8, 8, func(int) int { return 0 })
@@ -77,6 +110,15 @@ func TestQuestMissionSelectionProgressAndBonusOnce(t *testing.T) {
 	second := quest.Complete(game, HeatByLevel(3), now.Add(11*time.Second))
 	if first.MissionBonus != missionBonus || second.MissionBonus != missionBonus {
 		t.Fatalf("mission bonus first=%d second=%d", first.MissionBonus, second.MissionBonus)
+	}
+}
+
+func TestQuestMissionSelectionHonorsInjectedIndex(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(2), 8, 8)
+
+	if quest.Mission.ID != MissionSurvive60 {
+		t.Fatalf("Mission.ID = %q, want %q", quest.Mission.ID, MissionSurvive60)
 	}
 }
 
@@ -110,6 +152,17 @@ func TestQuestUpgradeChoicesAndEffects(t *testing.T) {
 	}
 }
 
+func TestQuestUpgradeOrderingHonorsInjectedIndices(t *testing.T) {
+	choices := PickUpgradeChoices(&sequenceRandom{values: []int{2, 0, 0}})
+
+	want := []Upgrade{UpgradeDoubleByte, UpgradeSlowClock, UpgradeShield}
+	for index, upgrade := range want {
+		if choices[index].Upgrade != upgrade {
+			t.Fatalf("choices[%d] = %q, want %q; choices=%#v", index, choices[index].Upgrade, upgrade, choices)
+		}
+	}
+}
+
 func TestQuestCompletionSurvivalBonusIdempotent(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(8, 8, func(int) int { return 0 })
@@ -131,4 +184,18 @@ type fixedRandom int
 
 func (r fixedRandom) Intn(max int) int {
 	return int(r)
+}
+
+type sequenceRandom struct {
+	values []int
+	index  int
+}
+
+func (r *sequenceRandom) Intn(max int) int {
+	if len(r.values) == 0 {
+		return 0
+	}
+	value := r.values[r.index%len(r.values)]
+	r.index++
+	return value
 }

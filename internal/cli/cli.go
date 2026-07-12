@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -79,6 +80,7 @@ type App struct {
 	ReceiveCommand func(context.Context, string) (session.Command, error)
 	ExecCommand    func(session.Session, session.Command) error
 	RunGameShell   func(string) error
+	RunShell       func(game.Shell) error
 	Now            func() time.Time
 }
 
@@ -529,6 +531,7 @@ func (a App) runGameShell(statePath string) error {
 
 	runtimeSession := session.FromStatePath(statePath)
 	shell := game.Shell{
+		Random: rand.New(rand.NewSource(a.now().UnixNano())),
 		ReadState: func() (session.State, error) {
 			return session.ReadState(runtimeSession)
 		},
@@ -556,6 +559,9 @@ func (a App) runGameShell(statePath string) error {
 			}
 			return a.detachClients(info)
 		},
+	}
+	if a.RunShell != nil {
+		return a.RunShell(shell)
 	}
 	return shell.Run(context.Background())
 }

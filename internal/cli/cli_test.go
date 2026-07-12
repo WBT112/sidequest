@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WBT112/sidequest/internal/game"
 	"github.com/WBT112/sidequest/internal/runhistory"
 	"github.com/WBT112/sidequest/internal/session"
 	"github.com/WBT112/sidequest/internal/tmux"
@@ -299,6 +300,29 @@ func TestRunGameRunnerDispatchesStatePath(t *testing.T) {
 	}
 	if receivedPath != "/tmp/sidequest-1000/session-1/state.json" {
 		t.Fatalf("receivedPath = %q", receivedPath)
+	}
+}
+
+func TestRunGameShellConfiguresProductionRandomSource(t *testing.T) {
+	started := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	var captured game.Shell
+	app := App{
+		Now: func() time.Time { return started },
+		RunShell: func(shell game.Shell) error {
+			captured = shell
+			return nil
+		},
+	}
+
+	code := app.Run([]string{gameRunnerMode, "/tmp/sidequest-1000/session-1/state.json"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if captured.Random == nil {
+		t.Fatal("game shell Random = nil, want production source")
+	}
+	if captured.ReadState == nil {
+		t.Fatal("game shell ReadState = nil")
 	}
 }
 
