@@ -359,17 +359,27 @@ func freezeView(view *viewState, now time.Time, statsManager StatsManager) {
 		return
 	}
 	view.Frozen = true
-	if view.Started && view.Game != nil && !view.Game.Over {
+	if shouldFinalizeTerminalRound(view) {
 		finalizeRound(view, statsManagerOrDefault(statsManager))
 	} else if !view.RoundFinalized {
 		refreshLeaderboard(view, statsManagerOrDefault(statsManager))
 	}
-	if view.Quest.Enabled() {
+	if view.Quest.Enabled() && view.RoundFinalized {
 		manager := statsManagerOrDefault(statsManager)
 		if _, err := manager.UpdateQuest(view.FinalScore, view.Quest); err != nil {
 			view.StatsMessage = "Stats not saved: " + err.Error()
 		}
 	}
+}
+
+func shouldFinalizeTerminalRound(view *viewState) bool {
+	if !view.Started || view.Game == nil || view.Game.Over {
+		return false
+	}
+	if view.SessionState == session.StatusCompleted {
+		return true
+	}
+	return currentRoundScore(view) > 0
 }
 
 func (s Shell) statsManager() StatsManager {
@@ -425,6 +435,13 @@ func finalScore(view *viewState) int {
 		return view.FinalScore.FinalScore
 	}
 	if view.Game == nil {
+		return 0
+	}
+	return view.Game.Score
+}
+
+func currentRoundScore(view *viewState) int {
+	if view == nil || view.Game == nil {
 		return 0
 	}
 	return view.Game.Score
@@ -633,20 +650,20 @@ func render(screen tcell.Screen, view viewState) {
 	}
 
 	lines := []renderLine{
-		{0, "Sidequest Snake [" + gameModeLabel(view) + "]", titleStyle},
-		{1, "Command state: " + displayState(view.SessionState), statusStyle},
-		{2, heatScoreLine(view), scoreStyle},
-		{3, controlLine, secondaryStyle},
+		{y: 0, text: "Sidequest Snake [" + gameModeLabel(view) + "]", style: titleStyle, centered: true},
+		{y: 1, text: "Command state: " + displayState(view.SessionState), style: statusStyle, centered: true},
+		{y: 2, text: heatScoreLine(view), style: scoreStyle, centered: true},
+		{y: 3, text: controlLine, style: secondaryStyle, centered: true},
 	}
 	if session.IsTerminalStatus(view.SessionState) {
-		lines = append(lines, renderLine{height - 2, resultSummary(view.State), secondaryStyle})
+		lines = append(lines, renderLine{y: height - 2, text: resultSummary(view.State), style: secondaryStyle})
 	}
 	if view.Message != "" {
 		y := height - 2
 		if session.IsTerminalStatus(view.SessionState) {
 			y = height - 3
 		}
-		lines = append(lines, renderLine{y, view.Message, secondaryStyle})
+		lines = append(lines, renderLine{y: y, text: view.Message, style: secondaryStyle})
 	}
 
 	drawSnake(screen, view.Game, style)
@@ -655,6 +672,10 @@ func render(screen tcell.Screen, view viewState) {
 	drawResultPanel(screen, view, style)
 
 	for _, line := range lines {
+		if line.centered {
+			drawCenteredText(screen, 1, line.y, width-2, line.text, line.style)
+			continue
+		}
 		drawText(screen, 1, line.y, width-2, line.text, line.style)
 	}
 
@@ -662,9 +683,10 @@ func render(screen tcell.Screen, view viewState) {
 }
 
 type renderLine struct {
-	y     int
-	text  string
-	style tcell.Style
+	y        int
+	text     string
+	style    tcell.Style
+	centered bool
 }
 
 func newSnakeGameForScreen(screen tcell.Screen) *SnakeGame {

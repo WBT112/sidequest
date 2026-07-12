@@ -122,26 +122,66 @@ func TestRunDisplaysQuestModeHUD(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
+func TestRenderCentersQuestHUDLines(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	defer screen.Fini()
+
+	width, height := 100, 20
+	screen.SetSize(width, height)
+
+	view := viewState{
+		SessionState: session.StatusRunning,
+		Heat:         HeatByLevel(1),
+		Quest: &QuestState{
+			Mode:            GameModeQuest,
+			Mission:         Mission{ID: MissionGolden2, Label: "Collect 2 Golden Bytes", Target: 2},
+			MissionProgress: 0,
+		},
+	}
+
+	render(screen, view)
+
+	cases := []struct {
+		y    int
+		text string
+	}{
+		{y: 1, text: "Command state: running"},
+		{y: 2, text: "SCORE 0  COMBO x0  HEAT 1 x1.0"},
+		{y: 3, text: "QUEST: Collect 2 Golden Bytes 0/2"},
+	}
+
+	for _, test := range cases {
+		got := rowTextIndex(screen, test.y, test.text)
+		if got < 0 {
+			t.Fatalf("row %d missing %q:\n%s", test.y, test.text, screenText(screen))
+		}
+		want := 1 + ((width - 2 - textDisplayWidth(test.text)) / 2)
+		if got != want {
+			t.Fatalf("row %d start column = %d, want %d for %q", test.y, got, want, test.text)
+		}
+	}
+}
+
 func TestRunUpdatesQuestStatsWhenCommandFinishes(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(80, 12)
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	started := now.Add(-time.Minute)
-	states := make(chan session.State, 4)
-	states <- session.State{Status: session.StatusRunning, StartedAt: &started, GameMode: GameModeQuest}
-	states <- session.State{Status: session.StatusCompleted, StartedAt: &started, DurationMillis: int64Ptr(60_000), GameMode: GameModeQuest}
+	var finished atomic.Bool
 	statsDir := filepath.Join(t.TempDir(), "sidequest")
 	shell := Shell{
 		NewScreen: func() (tcell.Screen, error) { return screen, nil },
 		ReadState: func() (session.State, error) {
-			select {
-			case state := <-states:
-				return state, nil
-			default:
+			if finished.Load() {
 				return session.State{Status: session.StatusCompleted, StartedAt: &started, DurationMillis: int64Ptr(60_000), GameMode: GameModeQuest}, nil
 			}
+			return session.State{Status: session.StatusRunning, StartedAt: &started, GameMode: GameModeQuest}, nil
 		},
 		PollInterval: 20 * time.Millisecond,
+		GameInterval: time.Second,
 		StatsManager: StatsManager{
 			BaseDir: statsDir,
 		},
@@ -150,6 +190,11 @@ func TestRunUpdatesQuestStatsWhenCommandFinishes(t *testing.T) {
 
 	cancel, errc := runShellCancellable(shell)
 
+	waitForRenderedText(t, screen, "QUEST:")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
+	finished.Store(true)
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 	waitForRenderedText(t, screen, "COMMAND FINISHED")
 	if _, err := os.Stat(filepath.Join(statsDir, statsFileName)); err != nil {
 		t.Fatalf("stats file was not written: %v", err)
@@ -595,6 +640,89 @@ func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotPersistZeroScoreWhenCommandFailsImmediately(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(70, 12)
+	statsDir := filepath.Join(t.TempDir(), "sidequest")
+	var failed atomic.Bool
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			if failed.Load() {
+				return session.State{Status: session.StatusFailed}, nil
+			}
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: 20 * time.Millisecond,
+		GameInterval: time.Second,
+		StatsManager: StatsManager{
+			BaseDir: statsDir,
+		},
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
+	failed.Store(true)
+	waitForRenderedText(t, screen, "Command state: failed")
+	waitForRenderedText(t, screen, "COMMAND FINISHED")
+	waitForMissingRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if entries := (StatsManager{BaseDir: statsDir}).Leaderboard(GameModeClassic); len(entries) != 0 {
+		t.Fatalf("classic leaderboard = %#v, want empty", entries)
+	}
+}
+
+func TestRunDoesNotUpdateQuestStatsWhenCommandFailsImmediately(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(70, 12)
+	statsDir := filepath.Join(t.TempDir(), "sidequest")
+	var failed atomic.Bool
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			if failed.Load() {
+				return session.State{Status: session.StatusFailed, GameMode: GameModeQuest}, nil
+			}
+			return session.State{Status: session.StatusRunning, GameMode: GameModeQuest}, nil
+		},
+		PollInterval: 20 * time.Millisecond,
+		GameInterval: time.Second,
+		StatsManager: StatsManager{
+			BaseDir: statsDir,
+		},
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "QUEST:")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
+	failed.Store(true)
+	waitForRenderedText(t, screen, "Command state: failed")
+	waitForMissingRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(statsDir, statsFileName)); !os.IsNotExist(err) {
+		t.Fatalf("stats file exists after immediate command failure: %v", err)
+	}
+}
+
 func TestRunHandlesResize(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(40, 10)
@@ -796,6 +924,44 @@ func screenText(screen tcell.SimulationScreen) string {
 			builder.WriteRune(main)
 		}
 		builder.WriteByte('\n')
+	}
+	return builder.String()
+}
+
+func rowTextIndex(screen tcell.SimulationScreen, row int, text string) int {
+	haystack := []rune(screenRowText(screen, row))
+	needle := []rune(text)
+	if len(needle) == 0 {
+		return 0
+	}
+	for start := 0; start+len(needle) <= len(haystack); start++ {
+		matched := true
+		for offset := range needle {
+			if haystack[start+offset] != needle[offset] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return start
+		}
+	}
+	return -1
+}
+
+func screenRowText(screen tcell.SimulationScreen, row int) string {
+	width, height := screen.Size()
+	if row < 0 || row >= height {
+		return ""
+	}
+	var builder strings.Builder
+	for x := 0; x < width; x++ {
+		main, _, _, _ := screen.GetContent(x, row)
+		if main == 0 {
+			builder.WriteRune(' ')
+			continue
+		}
+		builder.WriteRune(main)
 	}
 	return builder.String()
 }

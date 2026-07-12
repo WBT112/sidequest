@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/WBT112/sidequest/internal/session"
@@ -115,7 +116,11 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("split-window", "-v", "-l", "16", "-t", info.SessionName+":0.0", shellJoin(gameRunner)); err != nil {
 		return cleanup(fmt.Errorf("create placeholder pane: %w", err))
 	}
-	if err := run("select-pane", "-t", info.SessionName+":0.1", "-T", "Snake - arrows/WASD, F9 hide, F12 Command, F10 shell"); err != nil {
+	gamePaneTitle := "Snake - arrows/WASD, F9 hide, F12 Command, F10 shell"
+	if outputRunner, ok := runner.(OutputRunner); ok {
+		gamePaneTitle = centeredPaneTitle(outputRunner, tmuxPath, baseArgs, info.SessionName+":0.1", gamePaneTitle)
+	}
+	if err := run("select-pane", "-t", info.SessionName+":0.1", "-T", gamePaneTitle); err != nil {
 		return cleanup(fmt.Errorf("title game pane: %w", err))
 	}
 	if err := run("bind-key", "-n", "F12", "select-pane", "-t", ":.+"); err != nil {
@@ -357,4 +362,33 @@ func shellQuote(value string) string {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func centeredPaneTitle(outputRunner OutputRunner, tmuxPath string, baseArgs []string, paneTarget string, title string) string {
+	width, err := paneWidth(outputRunner, tmuxPath, baseArgs, paneTarget)
+	if err != nil || width <= 0 {
+		return title
+	}
+	titleWidth := len([]rune(title))
+	if titleWidth >= width {
+		return title
+	}
+	padding := (width - titleWidth) / 2
+	if padding <= 0 {
+		return title
+	}
+	return strings.Repeat(" ", padding) + title
+}
+
+func paneWidth(outputRunner OutputRunner, tmuxPath string, baseArgs []string, paneTarget string) (int, error) {
+	args := append(append([]string{}, baseArgs...), "display-message", "-p", "-t", paneTarget, "#{pane_width}")
+	output, err := outputRunner.Output(tmuxPath, args...)
+	if err != nil {
+		return 0, err
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		return 0, err
+	}
+	return width, nil
 }

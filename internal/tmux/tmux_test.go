@@ -140,6 +140,47 @@ func TestStartDoesNotPutUserCommandInTmuxCommands(t *testing.T) {
 	}
 }
 
+func TestStartCentersGamePaneTitleWhenWidthAvailable(t *testing.T) {
+	runner := &recordingRunner{output: "100\n"}
+	layout := Layout{CommandRunner: runner}
+	runtimeSession := session.Session{ID: "abc123", SocketPath: "/run/user/1000/sidequest/abc123/command.sock"}
+
+	_, err := layout.Start(
+		runtimeSession,
+		[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+		[]string{"/usr/bin/sidequest", "__sidequest-game", "/run/user/1000/sidequest/abc123/state.json"},
+	)
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	if len(runner.outputCalls) != 1 {
+		t.Fatalf("output calls = %d, want 1", len(runner.outputCalls))
+	}
+	wantOutputCall := []string{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "display-message", "-p", "-t", "sidequest-abc123:0.1", "#{pane_width}"}
+	if !equalStrings(runner.outputCalls[0], wantOutputCall) {
+		t.Fatalf("output call = %#v, want %#v", runner.outputCalls[0], wantOutputCall)
+	}
+
+	const baseTitle = "Snake - arrows/WASD, F9 hide, F12 Command, F10 shell"
+	title := ""
+	for _, call := range runner.calls {
+		if len(call) >= 5 && call[len(call)-3] == "sidequest-abc123:0.1" && call[len(call)-2] == "-T" {
+			title = call[len(call)-1]
+			break
+		}
+	}
+	if title == "" {
+		t.Fatalf("game pane title call not found:\n%#v", runner.calls)
+	}
+	if !strings.HasSuffix(title, baseTitle) {
+		t.Fatalf("game pane title = %q, want suffix %q", title, baseTitle)
+	}
+	if len(title) <= len(baseTitle) || !strings.HasPrefix(title, " ") {
+		t.Fatalf("game pane title = %q, want centered title with leading padding", title)
+	}
+}
+
 func TestAttachUsesIsolatedServer(t *testing.T) {
 	runner := &recordingRunner{}
 	layout := Layout{CommandRunner: runner}

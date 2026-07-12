@@ -71,7 +71,7 @@ func TestValidateRejectsUnavailableTerminalSize(t *testing.T) {
 func TestValidateRejectsSmallTerminal(t *testing.T) {
 	env := validEnvironment()
 	env.TerminalSize = func(uintptr) (Size, error) {
-		return Size{Columns: 79, Rows: 23}, nil
+		return Size{Columns: 80, Rows: 15}, nil
 	}
 
 	err := Validate(env)
@@ -80,7 +80,7 @@ func TestValidateRejectsSmallTerminal(t *testing.T) {
 	}
 
 	message := err.Error()
-	for _, fragment := range []string{"required at least 80x24", "detected 79x23"} {
+	for _, fragment := range []string{"required at least 80x16", "detected 80x15"} {
 		if !strings.Contains(message, fragment) {
 			t.Fatalf("error %q does not contain %q", message, fragment)
 		}

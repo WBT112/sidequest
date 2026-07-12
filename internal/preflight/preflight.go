@@ -10,7 +10,7 @@ import (
 
 const (
 	MinimumColumns = 80
-	MinimumRows    = 24
+	MinimumRows    = 16
 )
 
 var (
