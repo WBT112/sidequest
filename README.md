@@ -7,7 +7,7 @@ Look no further!
 
 Sidequest runs your command in one tmux pane and focuses a small Snake game in another.
 The command stays visible, so you can follow what's happening while you play. Now with Boss-Key(F9).
-You also get noticed when the command finishes. And the command output is stored for later review. So you kind of do documentation at the same time.
+You also get noticed when the command finishes. By default, command-pane output is stored for later review; use `--no-history` for sensitive commands.
 
 ![Sidequest Snake gameplay](docs/snake1.png)
 
@@ -137,6 +137,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 sidequest -- ssh deploy@example.com
 sidequest -- sh -c 'sudo du -xh /var /usr /home 2>/dev/null | sort -h'
+sidequest --no-history -- ssh production.example.com
 sidequest --mode quest -- make test
 sidequest -- codex
 sidequest -- claude "Run the test suite, fix any failures, and summarize the changes."
@@ -193,10 +194,20 @@ sidequest output last
 sidequest purge <run-id>
 ```
 
-Finished runs keep visible command-pane output under
+By default, finished runs keep visible command-pane output under
 `${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/`. Sidequest stores result
 metadata and pane output, not the command or argument list. Terminal output may
 still contain sensitive data.
+
+For sensitive workloads, disable run history:
+
+```bash
+sidequest --no-history -- <command> [arguments...]
+```
+
+In no-history mode, Sidequest does not capture the command pane, does not write
+an output file, and does not create stored run metadata. The live tmux pane
+scrollback remains visible until the Sidequest session is closed.
 
 Game statistics and separate Classic/Quest TOP 5 lists are stored locally in
 `${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json`.

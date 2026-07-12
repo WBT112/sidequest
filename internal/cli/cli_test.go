@@ -47,6 +47,19 @@ func TestParseModeBeforeSeparator(t *testing.T) {
 	}
 }
 
+func TestParseNoHistoryBeforeSeparator(t *testing.T) {
+	result, err := Parse([]string{"--no-history", "--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !result.Config.NoHistory {
+		t.Fatal("NoHistory = false, want true")
+	}
+	if result.Config.Executable != "sleep" {
+		t.Fatalf("Executable = %q, want sleep", result.Config.Executable)
+	}
+}
+
 func TestParseRejectsUnknownMode(t *testing.T) {
 	_, err := Parse([]string{"--mode", "arena", "--", "true"})
 	if err == nil || !strings.Contains(err.Error(), "unknown mode") {
@@ -122,8 +135,41 @@ func TestRunHelpDocumentsSeparator(t *testing.T) {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
 
-	if !strings.Contains(out.String(), "sidequest [options] -- <command> [arguments...]") {
-		t.Fatalf("help output does not document command separator:\n%s", out.String())
+	for _, want := range []string{"sidequest [options] -- <command> [arguments...]", "--no-history"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRunCommandStoresNoHistoryChoice(t *testing.T) {
+	var out bytes.Buffer
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("no-history")}
+	app := App{
+		Out:       &out,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			return manager.Create()
+		},
+		RunLayout: func(gotSession session.Session, gotCommand session.Command) error {
+			state, err := session.ReadState(gotSession)
+			if err != nil {
+				t.Fatalf("ReadState returned error: %v", err)
+			}
+			if !state.NoHistory {
+				t.Fatal("NoHistory = false, want true")
+			}
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"--no-history", "--", "true"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
 	}
 }
 
@@ -708,6 +754,55 @@ func TestCleanupClosedSessionCapturesAndStoresBeforeClosingTmux(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("cleanup output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestCleanupClosedSessionSkipsCaptureAndStoreWhenNoHistory(t *testing.T) {
+	exitCode := 0
+	record := session.Record{
+		Session: session.Session{ID: "secret", Dir: "/tmp/sidequest-1000/secret"},
+		State: session.State{
+			Status:     session.StatusCompleted,
+			ExitCode:   &exitCode,
+			TmuxSocket: "sidequest-secret",
+			NoHistory:  true,
+		},
+	}
+	var order []string
+	var out bytes.Buffer
+	app := App{
+		Out:            &out,
+		TmuxHasSession: func(tmux.Info) bool { return true },
+		CapturePane: func(tmux.Info) (string, bool, error) {
+			t.Fatal("CapturePane was called in no-history mode")
+			return "", false, nil
+		},
+		StoreRun: func(session.Record, string, bool) (runhistory.Run, error) {
+			t.Fatal("StoreRun was called in no-history mode")
+			return runhistory.Run{}, nil
+		},
+		CloseTmux: func(tmux.Info) error {
+			order = append(order, "close")
+			return nil
+		},
+		CleanupSession: func(session.Session) error {
+			order = append(order, "cleanup")
+			return nil
+		},
+	}
+
+	if err := app.cleanupClosedSession(record); err != nil {
+		t.Fatalf("cleanupClosedSession returned error: %v", err)
+	}
+	if got, want := strings.Join(order, ","), "close,cleanup"; got != want {
+		t.Fatalf("order = %q, want %q", got, want)
+	}
+	output := out.String()
+	if !strings.Contains(output, "History disabled: no command output saved for run secret") {
+		t.Fatalf("cleanup output missing no-history notice:\n%s", output)
+	}
+	if strings.Contains(output, "Saved output") || strings.Contains(output, "sidequest output secret") || strings.Contains(output, "sidequest show secret") {
+		t.Fatalf("cleanup output referenced stored history in no-history mode:\n%s", output)
 	}
 }
 

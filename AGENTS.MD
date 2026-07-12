@@ -133,7 +133,7 @@ Security and privacy are core requirements.
 Sidequest must not:
 
 * store the requested command or its arguments on disk;
-* record command output;
+* record command output when `--no-history` is used;
 * create shell history;
 * inspect credentials;
 * upload telemetry;
@@ -183,6 +183,16 @@ Persist only non-sensitive session metadata such as:
 * exit code;
 * signal-related termination state;
 * tmux socket identifier.
+
+By default, Sidequest may persist visible command-pane output in run history for
+later local review. Users can disable that behavior with:
+
+```bash
+sidequest --no-history -- <command> [arguments...]
+```
+
+When `--no-history` is set, cleanup must not capture the tmux command pane,
+must not write an output file, and must not create stored run metadata.
 
 ## tmux architecture
 
