@@ -3,9 +3,17 @@
 Ever wondered what to do while waiting for an ansible playbook to finish, a build to complete, or a long-running script to finish?
 Ever tried to look busy while you just wait for Codex to do your stuff ?
 
+Look no further!
+
 Sidequest runs your command in one tmux pane and focuses a small Snake game in another.
 The command stays visible, so you can follow what's happening while you play. Now with Boss-Key(F9).
-You also get noticed when the command finishes. And the command output is also stored for later review.
+You also get noticed when the command finishes. And the command output is stored for later review. So you kind of do documentation at the same time.
+
+## Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Gameplay](#gameplay)
 
 ## Installation
 
@@ -150,10 +158,6 @@ still contain sensitive data.
 Game statistics and separate Classic/Quest TOP 5 lists are stored locally in
 `${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json`.
 
-## Requirements
-
-Sidequest targets Linux terminals and requires `tmux` in `PATH`.
-
 ## Development
 
 Run the normal local quality suite before committing:
@@ -181,4 +185,4 @@ Extended checks:
 Sidequest is meant for builds, upgrades, deployments and scripts that should stay
 visible but do not need constant attention. It does not modify the wrapped
 command, replace tmux, hide interactive prompts or act as a full terminal
-emulator. Do not use this on production servers of course.
+emulator. Do not use this on production servers of course. I try to make Sidequest as safe as possible, but it is still a game and may have bugs. Use at your own risk.
