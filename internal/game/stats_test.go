@@ -168,6 +168,71 @@ func TestLeaderboardCapsAtFiveAndKeepsDuplicateScores(t *testing.T) {
 	}
 }
 
+func TestLeaderboardKeepsCutoffTieVisible(t *testing.T) {
+	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+	for index, score := range []int{500, 400, 300, 200, 100} {
+		if _, _, err := manager.AddLeaderboardScore(GameModeClassic, score, string(rune('a'+index))); err != nil {
+			t.Fatalf("AddLeaderboardScore returned error: %v", err)
+		}
+	}
+
+	if rank := manager.QualifyingRank(GameModeClassic, 100); rank != 5 {
+		t.Fatalf("QualifyingRank cutoff tie = %d, want 5", rank)
+	}
+	if _, rank, err := manager.AddLeaderboardScore(GameModeClassic, 100, "cutoff"); err != nil || rank != 5 {
+		t.Fatalf("cutoff tie AddLeaderboardScore rank=%d err=%v", rank, err)
+	}
+	entries := manager.Leaderboard(GameModeClassic)
+	if len(entries) != 5 {
+		t.Fatalf("leaderboard length = %d, want 5", len(entries))
+	}
+	if entries[4] != (LeaderboardEntry{Score: 100, PlayerName: "cutoff"}) {
+		t.Fatalf("fifth entry = %#v, want saved cutoff tie", entries[4])
+	}
+}
+
+func TestLeaderboardCutoffTieCanBeRepeated(t *testing.T) {
+	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+	for index, score := range []int{500, 400, 300, 200, 100} {
+		if _, _, err := manager.AddLeaderboardScore(GameModeQuest, score, string(rune('a'+index))); err != nil {
+			t.Fatalf("AddLeaderboardScore returned error: %v", err)
+		}
+	}
+
+	for _, name := range []string{"first", "second"} {
+		if _, rank, err := manager.AddLeaderboardScore(GameModeQuest, 100, name); err != nil || rank != 5 {
+			t.Fatalf("cutoff tie %q rank=%d err=%v", name, rank, err)
+		}
+	}
+	entries := manager.Leaderboard(GameModeQuest)
+	if len(entries) != 5 {
+		t.Fatalf("leaderboard length = %d, want 5", len(entries))
+	}
+	if entries[4] != (LeaderboardEntry{Score: 100, PlayerName: "second"}) {
+		t.Fatalf("fifth entry = %#v, want latest cutoff tie", entries[4])
+	}
+	if rank := manager.QualifyingRank(GameModeQuest, 99); rank != 0 {
+		t.Fatalf("QualifyingRank below cutoff = %d, want 0", rank)
+	}
+}
+
+func TestLeaderboardKeepsStableEqualScoresAboveCutoff(t *testing.T) {
+	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+	for index, score := range []int{500, 400, 300, 200, 100} {
+		if _, _, err := manager.AddLeaderboardScore(GameModeClassic, score, string(rune('a'+index))); err != nil {
+			t.Fatalf("AddLeaderboardScore returned error: %v", err)
+		}
+	}
+
+	if _, rank, err := manager.AddLeaderboardScore(GameModeClassic, 300, "equal"); err != nil || rank != 4 {
+		t.Fatalf("equal score rank=%d err=%v", rank, err)
+	}
+	entries := manager.Leaderboard(GameModeClassic)
+	if entries[2] != (LeaderboardEntry{Score: 300, PlayerName: "c"}) || entries[3] != (LeaderboardEntry{Score: 300, PlayerName: "equal"}) {
+		t.Fatalf("equal score ordering = %#v", entries)
+	}
+}
+
 func TestStatsMigratesBestScoreToQuestTop5(t *testing.T) {
 	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
 	if err := os.MkdirAll(manager.BaseDir, 0o700); err != nil {

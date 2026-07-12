@@ -301,7 +301,11 @@ func leaderboardRank(entries []LeaderboardEntry, score int) int {
 	if score < entries[leaderboardLimit-1].Score {
 		return 0
 	}
-	return insertionIndex(entries, score) + 1
+	index := insertionIndex(entries, score)
+	if index >= leaderboardLimit {
+		return leaderboardLimit
+	}
+	return index + 1
 }
 
 func insertLeaderboardEntry(entries []LeaderboardEntry, entry LeaderboardEntry) ([]LeaderboardEntry, int) {
