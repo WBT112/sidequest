@@ -46,6 +46,12 @@ const (
 	bossContinueMessage = "F9 Continue"
 )
 
+const (
+	paneBorderStatus      = "top"
+	paneBorderStyle       = "fg=colour244"
+	paneActiveBorderStyle = "fg=brightwhite,bold"
+)
+
 func (l Layout) Start(runtimeSession session.Session, commandRunner []string, gameRunner []string) (Info, error) {
 	if len(commandRunner) == 0 {
 		return Info{}, fmt.Errorf("missing command runner")
@@ -88,11 +94,17 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("set-option", "-t", info.SessionName, "history-limit", fmt.Sprintf("%d", commandPaneHistoryLimit)); err != nil {
 		return cleanup(fmt.Errorf("set command pane history limit: %w", err))
 	}
-	if err := run("set-option", "-t", info.SessionName, "pane-border-status", "top"); err != nil {
+	if err := run("set-option", "-t", info.SessionName, "pane-border-status", paneBorderStatus); err != nil {
 		return cleanup(fmt.Errorf("enable pane titles: %w", err))
 	}
-	if err := run("set-option", "-t", info.SessionName, "pane-border-format", "#{pane_title}"); err != nil {
+	if err := run("set-option", "-t", info.SessionName, "pane-border-format", paneBorderFormat()); err != nil {
 		return cleanup(fmt.Errorf("configure pane titles: %w", err))
+	}
+	if err := run("set-option", "-t", info.SessionName, "pane-border-style", paneBorderStyle); err != nil {
+		return cleanup(fmt.Errorf("configure inactive pane border style: %w", err))
+	}
+	if err := run("set-option", "-t", info.SessionName, "pane-active-border-style", paneActiveBorderStyle); err != nil {
+		return cleanup(fmt.Errorf("configure active pane border style: %w", err))
 	}
 	if err := run("select-pane", "-t", info.SessionName+":0.0", "-T", "Command - F9 hide, F12 Snake, F10 shell"); err != nil {
 		return cleanup(fmt.Errorf("title command pane: %w", err))
@@ -125,6 +137,7 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 func bossHideCommand(info Info) string {
 	return strings.Join([]string{
 		fmt.Sprintf("if-shell -F '#{==:#{pane_index},1}' 'set-option -q -t %s %s 1' 'set-option -q -t %s %s 0'", info.SessionName, bossPrevGameOption, info.SessionName, bossPrevGameOption),
+		fmt.Sprintf("set-option -q -t %s pane-border-status off", info.SessionName),
 		fmt.Sprintf("select-pane -t %s:0.0", info.SessionName),
 		fmt.Sprintf("if-shell -F '#{window_zoomed_flag}' '' 'resize-pane -Z -t %s:0.0'", info.SessionName),
 		fmt.Sprintf("display-message -d 1500 '%s'", bossContinueMessage),
@@ -135,9 +148,15 @@ func bossHideCommand(info Info) string {
 func bossRestoreCommand(info Info) string {
 	return strings.Join([]string{
 		fmt.Sprintf("if-shell -F '#{window_zoomed_flag}' 'resize-pane -Z -t %s:0.0' ''", info.SessionName),
+		fmt.Sprintf("set-option -q -t %s pane-border-status %s", info.SessionName, paneBorderStatus),
+		fmt.Sprintf("set-option -q -t %s pane-border-format '%s'", info.SessionName, paneBorderFormat()),
 		fmt.Sprintf("if-shell -F '#{==:#{%s},1}' 'select-pane -t %s:0.1' 'select-pane -t %s:0.0'", bossPrevGameOption, info.SessionName, info.SessionName),
 		fmt.Sprintf("set-option -q -t %s %s 0", info.SessionName, bossHiddenOption),
 	}, " ; ")
+}
+
+func paneBorderFormat() string {
+	return "#{?pane_active,#[bold]#[reverse] ▶ #{pane_title} - #{?#{==:#{pane_index},0},INPUT ACTIVE,CONTROLS ACTIVE} #[default],#[dim]   #{pane_title} - #{?#{==:#{pane_index},0},RUNNING,PAUSED} #[default]}"
 }
 
 func (l Layout) Attach(info Info) error {

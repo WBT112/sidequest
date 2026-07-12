@@ -34,7 +34,9 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "status", "off"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "history-limit", "100000"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-status", "top"},
-		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-format", "#{pane_title}"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-format"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-style", "fg=colour244"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-active-border-style", "fg=brightwhite,bold"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.0", "-T", "Command - F9 hide, F12 Snake, F10 shell"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "remain-on-exit", "on"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "split-window", "-v", "-l", "16", "-t", "sidequest-abc123:0.0"},
@@ -53,10 +55,66 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 			t.Fatalf("call %d = %#v, want prefix %#v", index, runner.calls[index], want)
 		}
 	}
-	splitCall := runner.calls[7]
+	splitCall := runner.calls[9]
 	splitCommand := splitCall[len(splitCall)-1]
 	if !strings.Contains(splitCommand, "__sidequest-game") {
 		t.Fatalf("split command = %q, want game runner", splitCommand)
+	}
+}
+
+func TestStartConfiguresEnhancedPaneFocusFormatting(t *testing.T) {
+	runner := &recordingRunner{}
+	layout := Layout{CommandRunner: runner}
+	runtimeSession := session.Session{ID: "focus", SocketPath: "/tmp/sidequest-1000/focus/command.sock"}
+
+	if _, err := layout.Start(
+		runtimeSession,
+		[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+		[]string{"/usr/bin/sidequest", "__sidequest-game", "/tmp/sidequest-1000/focus/state.json"},
+	); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	joined := runner.joinedCalls()
+	for _, want := range []string{
+		"pane-border-status top",
+		"pane-border-style fg=colour244",
+		"pane-active-border-style fg=brightwhite,bold",
+		"▶ #{pane_title}",
+		"INPUT ACTIVE",
+		"CONTROLS ACTIVE",
+		"RUNNING",
+		"PAUSED",
+		"#{?pane_active",
+		"#{pane_index}",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("enhanced focus formatting missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestStartPreservesPaneTitleStrings(t *testing.T) {
+	runner := &recordingRunner{}
+	layout := Layout{CommandRunner: runner}
+	runtimeSession := session.Session{ID: "titles", SocketPath: "/tmp/sidequest-1000/titles/command.sock"}
+
+	if _, err := layout.Start(
+		runtimeSession,
+		[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+		[]string{"/usr/bin/sidequest", "__sidequest-game", "/tmp/sidequest-1000/titles/state.json"},
+	); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	joined := runner.joinedCalls()
+	for _, title := range []string{
+		"Command - F9 hide, F12 Snake, F10 shell",
+		"Snake - arrows/WASD, F9 hide, F12 Command, F10 shell",
+	} {
+		if !strings.Contains(joined, title) {
+			t.Fatalf("pane title %q was not preserved:\n%s", title, joined)
+		}
 	}
 }
 
@@ -200,6 +258,9 @@ func TestStartBindsBossKeyToOwnedSession(t *testing.T) {
 		"bind-key -n F9",
 		"@sidequest_boss_hidden",
 		"@sidequest_boss_prev_game",
+		"pane-border-status off",
+		"pane-border-status top",
+		"pane-border-format",
 		"resize-pane -Z -t sidequest-boss:0.0",
 		"select-pane -t sidequest-boss:0.1",
 		"F9 Continue",
