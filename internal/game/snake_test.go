@@ -42,6 +42,29 @@ func TestSnakeGrowsAndScoresAfterEatingFood(t *testing.T) {
 	}
 }
 
+func TestSnakeForcedGrowPreservesFoodAndScore(t *testing.T) {
+	game := NewSnakeGame(5, 3, func(int) int { return 0 })
+	game.Snake = []Point{{X: 1, Y: 1}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	game.Score = 7
+
+	result := game.StepGrow()
+
+	if result != StepAteFood {
+		t.Fatalf("StepGrow result = %v, want %v", result, StepAteFood)
+	}
+	if game.Score != 7 {
+		t.Fatalf("Score = %d, want preserved 7", game.Score)
+	}
+	if game.Food != (Point{X: 0, Y: 0}) {
+		t.Fatalf("Food = %#v, want preserved", game.Food)
+	}
+	if len(game.Snake) != 2 || game.Snake[0] != (Point{X: 2, Y: 1}) {
+		t.Fatalf("snake = %#v, want grown into next cell", game.Snake)
+	}
+}
+
 func TestSnakeUsesConfiguredFoodScore(t *testing.T) {
 	game := NewSnakeGame(5, 3, func(int) int { return 0 })
 	game.Snake = []Point{{X: 1, Y: 1}}

@@ -567,6 +567,74 @@ func TestStepGameCollectsNormalFoodWithoutConsumingQuestObjects(t *testing.T) {
 	}
 }
 
+func TestStepGameCollectsGoldenBytePreservesNormalFood(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 3}, {X: 2, Y: 3}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 1, Y: 1}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Mission = Mission{ID: MissionGolden2, Label: "Collect 2 Golden Bytes", Target: 2}
+	quest.Golden = GoldenByte{Active: true, Position: Point{X: 4, Y: 3}, ExpiresAt: now.Add(goldenByteTTL)}
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 6, Y: 6}, ExpiresAt: now.Add(pickupTTL)}
+	quest.DoubleCharges = 3
+	quest.DoubleUntil = now.Add(doubleScoreDuration)
+
+	result := stepGame(game, quest, HeatByLevel(1), now)
+
+	if result != StepAteFood {
+		t.Fatalf("stepGame result = %v, want golden-byte growth", result)
+	}
+	if game.Snake[0] != (Point{X: 4, Y: 3}) || len(game.Snake) != 3 {
+		t.Fatalf("snake = %#v, want grown onto golden byte", game.Snake)
+	}
+	if game.Food != (Point{X: 1, Y: 1}) {
+		t.Fatalf("food = %#v, want preserved normal food", game.Food)
+	}
+	if game.Score != goldenByteBase || quest.BaseScore != goldenByteBase {
+		t.Fatalf("score state game=%d base=%d, want golden score %d", game.Score, quest.BaseScore, goldenByteBase)
+	}
+	if quest.NormalFood != 0 || quest.GoldenCollected != 1 || quest.MissionProgress != 1 || quest.Combo != 1 {
+		t.Fatalf("quest counters normal=%d golden=%d mission=%d combo=%d", quest.NormalFood, quest.GoldenCollected, quest.MissionProgress, quest.Combo)
+	}
+	if quest.DoubleCharges != 3 || !quest.DoubleUntil.Equal(now.Add(doubleScoreDuration)) {
+		t.Fatalf("double score changed after golden collection: charges=%d until=%s", quest.DoubleCharges, quest.DoubleUntil)
+	}
+	if quest.Golden.Active {
+		t.Fatal("golden byte remained active after collection")
+	}
+	if !quest.Pickup.Active || quest.Pickup.Position != (Point{X: 6, Y: 6}) {
+		t.Fatalf("pickup changed after golden collection: %#v", quest.Pickup)
+	}
+}
+
+func TestStepGameCollectsGoldenByteOnNearlyFullBoard(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(3, 2, func(int) int { return 0 })
+	game.Snake = []Point{{X: 1, Y: 0}, {X: 0, Y: 0}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 1, Y: 1}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 3, 2)
+	quest.Mission = Mission{ID: MissionGolden2, Label: "Collect 2 Golden Bytes", Target: 2}
+	quest.Golden = GoldenByte{Active: true, Position: Point{X: 2, Y: 0}, ExpiresAt: now.Add(goldenByteTTL)}
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 2, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+
+	result := stepGame(game, quest, HeatByLevel(1), now)
+
+	if result != StepAteFood {
+		t.Fatalf("stepGame result = %v, want golden-byte growth", result)
+	}
+	if game.Food != (Point{X: 1, Y: 1}) {
+		t.Fatalf("food = %#v, want preserved valid food on nearly full board", game.Food)
+	}
+	if game.Food == quest.Pickup.Position || game.Occupies(game.Food) {
+		t.Fatalf("food overlaps occupied cell after golden collection: food=%#v pickup=%#v snake=%#v", game.Food, quest.Pickup.Position, game.Snake)
+	}
+	if quest.Golden.Active || quest.GoldenCollected != 1 || quest.MissionProgress != 1 {
+		t.Fatalf("golden state active=%t collected=%d mission=%d", quest.Golden.Active, quest.GoldenCollected, quest.MissionProgress)
+	}
+}
+
 func TestQuestCompletionSurvivalBonusIdempotent(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(8, 8, func(int) int { return 0 })

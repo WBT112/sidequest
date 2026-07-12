@@ -157,6 +157,14 @@ func (g *SnakeGame) ClearPendingDirections() {
 }
 
 func (g *SnakeGame) Step() StepResult {
+	return g.step(false)
+}
+
+func (g *SnakeGame) StepGrow() StepResult {
+	return g.step(true)
+}
+
+func (g *SnakeGame) step(forceGrow bool) StepResult {
 	if g.Over {
 		return StepMoved
 	}
@@ -174,7 +182,7 @@ func (g *SnakeGame) Step() StepResult {
 		return StepHitWall
 	}
 
-	willGrow := next == g.Food
+	willGrow := forceGrow || next == g.Food
 	if g.collidesWithSnake(next, willGrow) {
 		g.Over = true
 		return StepHitSelf
@@ -182,12 +190,14 @@ func (g *SnakeGame) Step() StepResult {
 
 	g.Snake = append([]Point{next}, g.Snake...)
 	if willGrow {
-		foodScore := g.FoodScore
-		if foodScore < 1 {
-			foodScore = 1
+		if !forceGrow {
+			foodScore := g.FoodScore
+			if foodScore < 1 {
+				foodScore = 1
+			}
+			g.Score += foodScore
+			g.PlaceFood()
 		}
-		g.Score += foodScore
-		g.PlaceFood()
 		return StepAteFood
 	}
 
