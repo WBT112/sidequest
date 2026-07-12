@@ -13,12 +13,62 @@ import (
 const DefaultPollInterval = 250 * time.Millisecond
 const DefaultGameInterval = 0
 const movementPulseInterval = 10 * time.Millisecond
+const focusPollInterval = 100 * time.Millisecond
 
 type StateReader func() (session.State, error)
+type FocusReader func() (bool, error)
+
+type PauseState struct {
+	Manual bool
+	Focus  bool
+}
+
+func (p PauseState) Active() bool {
+	return p.Manual || p.Focus
+}
+
+type PlayClock struct {
+	Accumulated time.Duration
+	ActiveSince time.Time
+	Running     bool
+}
+
+func (c *PlayClock) Start(now time.Time) bool {
+	if c.Running {
+		return false
+	}
+	c.ActiveSince = now
+	c.Running = true
+	return true
+}
+
+func (c *PlayClock) Stop(now time.Time) bool {
+	if !c.Running {
+		return false
+	}
+	if now.After(c.ActiveSince) {
+		c.Accumulated += now.Sub(c.ActiveSince)
+	}
+	c.Running = false
+	c.ActiveSince = time.Time{}
+	return true
+}
+
+func (c PlayClock) Elapsed(now time.Time) time.Duration {
+	elapsed := c.Accumulated
+	if c.Running && now.After(c.ActiveSince) {
+		elapsed += now.Sub(c.ActiveSince)
+	}
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed
+}
 
 type Shell struct {
 	NewScreen      func() (tcell.Screen, error)
 	ReadState      StateReader
+	ReadFocus      FocusReader
 	OnQuitActive   func() error
 	OnQuitTerminal func() error
 	Random         RandomSource
@@ -29,24 +79,28 @@ type Shell struct {
 }
 
 type viewState struct {
-	State        session.State
-	SessionState string
-	Paused       bool
-	Frozen       bool
-	Message      string
-	Started      bool
-	Game         *SnakeGame
-	CommandHeat  HeatLevel
-	Heat         HeatLevel
-	MaxHeat      int
-	HeatNotice   string
-	NoticeUntil  time.Time
-	RoundStarted time.Time
-	RoundHeat    int
-	RoundCatchUp bool
-	Quest        *QuestState
-	FinalScore   ScoreBreakdown
-	StatsMessage string
+	State          session.State
+	SessionState   string
+	Pause          PauseState
+	Frozen         bool
+	Message        string
+	Started        bool
+	Game           *SnakeGame
+	CommandHeat    HeatLevel
+	Heat           HeatLevel
+	MaxHeat        int
+	HeatNotice     string
+	NoticeUntil    time.Time
+	RoundStarted   time.Time
+	RoundHeat      int
+	RoundCatchUp   bool
+	Clock          PlayClock
+	GameEpoch      time.Time
+	GameTime       time.Time
+	NextFocusCheck time.Time
+	Quest          *QuestState
+	FinalScore     ScoreBreakdown
+	StatsMessage   string
 }
 
 func (s Shell) Run(ctx context.Context) error {
@@ -91,6 +145,7 @@ func (s Shell) Run(ctx context.Context) error {
 		return err
 	}
 	now := s.now()
+	gameEpoch := now
 	game := newSnakeGameForScreen(screen)
 	mode := gameMode(state.GameMode)
 	boardWidth, boardHeight := boardSize(screen)
@@ -99,12 +154,17 @@ func (s Shell) Run(ctx context.Context) error {
 		SessionState: state.Status,
 		Frozen:       terminalState(state.Status),
 		Game:         game,
-		RoundStarted: now,
+		RoundStarted: gameEpoch,
 		RoundHeat:    1,
-		Quest:        NewQuestState(mode, now, s.Random, boardWidth, boardHeight),
+		GameEpoch:    gameEpoch,
+		GameTime:     gameEpoch,
+		Quest:        NewQuestState(mode, gameEpoch, s.Random, boardWidth, boardHeight),
 	}
+	s.syncFocus(&view, now, true)
+	s.syncPlayClock(&view, now)
+	updateViewGameTime(&view, now)
 	updateViewHeat(&view, now)
-	nextMove := now.Add(activeMoveInterval(view, gameIntervalOverride, now))
+	nextMove := now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 	render(screen, view)
 
 	for {
@@ -124,26 +184,47 @@ func (s Shell) Run(ctx context.Context) error {
 					}
 					return nil
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'p' || typed.Rune() == 'P'):
-					view.Paused = !view.Paused
+					now := s.now()
+					wasPaused := view.Pause.Active()
+					view.Pause.Manual = !view.Pause.Manual
+					if view.Pause.Active() && !wasPaused {
+						view.Clock.Stop(now)
+					}
+					if wasPaused && !view.Pause.Active() {
+						view.Clock.Start(now)
+						updateViewGameTime(&view, now)
+						nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
+					}
+					updateViewGameTime(&view, now)
+					updateViewHeat(&view, now)
 					render(screen, view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'r' || typed.Rune() == 'R') && !view.Frozen && game.Over:
 					now := s.now()
+					updateViewGameTime(&view, now)
 					game = newSnakeGameForScreen(screen)
 					view.Game = game
 					view.Started = false
-					view.Paused = false
-					view.RoundStarted = now
+					view.Pause.Manual = false
+					view.Clock.Stop(now)
+					view.RoundStarted = view.GameTime
 					view.RoundHeat = RestartStartHeat(view.CommandHeat.Level)
 					view.RoundCatchUp = view.RoundHeat < view.CommandHeat.Level
 					if view.Quest.Enabled() {
 						view.Quest.OnCrash()
 					}
 					updateViewHeat(&view, now)
-					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, now))
+					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 					render(screen, view)
 				default:
-					if direction, ok := directionFromKey(typed); ok && !view.Frozen && !game.Over {
+					if direction, ok := directionFromKey(typed); ok && !view.Frozen && !game.Over && !view.Pause.Focus {
+						now := s.now()
+						firstMove := !view.Started
 						view.Started = true
+						if firstMove {
+							view.Clock.Start(now)
+							updateViewGameTime(&view, now)
+							nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
+						}
 						game.ChangeDirection(direction)
 						render(screen, view)
 					}
@@ -158,28 +239,45 @@ func (s Shell) Run(ctx context.Context) error {
 			}
 		case <-movementPulse.C:
 			now := s.now()
+			focusChanged, focusResumed := false, false
+			if !now.Before(view.NextFocusCheck) {
+				focusChanged, focusResumed = s.syncFocus(&view, now, true)
+			}
+			clockStarted, _ := s.syncPlayClock(&view, now)
+			updateViewGameTime(&view, now)
+			if focusResumed || clockStarted {
+				nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
+			}
 			heatChanged := updateViewHeat(&view, now)
 			if view.Quest.Enabled() {
-				view.Quest.Tick(game, view.Heat, now)
+				view.Quest.Tick(game, view.Heat, view.GameTime)
 			}
-			if view.Started && !view.Paused && !view.Frozen && !game.Over {
+			if view.Started && !view.Pause.Active() && !view.Frozen && !game.Over {
 				if now.Before(nextMove) {
-					if heatChanged {
+					if heatChanged || focusChanged {
 						render(screen, view)
 					}
 					continue
 				}
+				stepFocusChanged, stepFocusResumed := s.syncFocus(&view, now, true)
+				if stepFocusResumed {
+					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
+				}
+				if stepFocusChanged || view.Pause.Focus {
+					render(screen, view)
+					continue
+				}
 				game.FoodScore = view.Heat.ScoreAward(baseFoodScore)
 				game.FoodHeat = view.Heat.Level
-				stepGame(game, view.Quest, view.Heat, now)
+				stepGame(game, view.Quest, view.Heat, view.GameTime)
 				if game.Over && view.Quest.Enabled() {
 					view.Quest.OnCrash()
 				}
-				nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, now))
+				nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 				render(screen, view)
 				continue
 			}
-			if heatChanged {
+			if heatChanged || focusChanged {
 				render(screen, view)
 			}
 		case <-ticker.C:
@@ -193,7 +291,10 @@ func (s Shell) Run(ctx context.Context) error {
 			view.State = state
 			view.SessionState = state.Status
 			if session.IsTerminalStatus(state.Status) {
-				freezeView(&view, s.now(), s.StatsManager)
+				now := s.now()
+				view.Clock.Stop(now)
+				updateViewGameTime(&view, now)
+				freezeView(&view, view.GameTime, s.StatsManager)
 			}
 			updateViewHeat(&view, s.now())
 			render(screen, view)
@@ -251,6 +352,50 @@ func gameMode(mode string) string {
 	return GameModeClassic
 }
 
+func (s Shell) syncFocus(view *viewState, now time.Time, force bool) (changed bool, resumed bool) {
+	if !force && now.Before(view.NextFocusCheck) {
+		return false, false
+	}
+	view.NextFocusCheck = now.Add(focusPollInterval)
+	if s.ReadFocus == nil || view.Frozen {
+		if view.Pause.Focus {
+			view.Pause.Focus = false
+			return true, true
+		}
+		return false, false
+	}
+	active, err := s.ReadFocus()
+	nextFocusPause := err != nil || !active
+	if view.Pause.Focus == nextFocusPause {
+		return false, false
+	}
+	view.Pause.Focus = nextFocusPause
+	if nextFocusPause && view.Game != nil {
+		view.Game.ClearPendingDirections()
+	}
+	return true, !nextFocusPause
+}
+
+func (s Shell) syncPlayClock(view *viewState, now time.Time) (started bool, stopped bool) {
+	shouldRun := view.Started &&
+		!view.Pause.Active() &&
+		!view.Frozen &&
+		view.Game != nil &&
+		!view.Game.Over &&
+		!session.IsTerminalStatus(view.SessionState)
+	if shouldRun {
+		return view.Clock.Start(now), false
+	}
+	return false, view.Clock.Stop(now)
+}
+
+func updateViewGameTime(view *viewState, now time.Time) {
+	if view.GameEpoch.IsZero() {
+		view.GameEpoch = now
+	}
+	view.GameTime = view.GameEpoch.Add(view.Clock.Elapsed(now))
+}
+
 func (s Shell) now() time.Time {
 	if s.Now != nil {
 		return s.Now()
@@ -298,8 +443,8 @@ func render(screen tcell.Screen, view viewState) {
 	if view.Started {
 		controlLine = "Arrows/WASD move  P pause/resume  Q exit/cleanup  F10 detach/list"
 	}
-	if view.Paused {
-		controlLine = "Paused  P resume  Q exit/cleanup  F10 detach/list"
+	if view.Pause.Active() {
+		controlLine = pauseLine(view.Pause)
 	}
 	if view.Frozen {
 		controlLine = "Command finished. Q exit/cleanup  F10 detach/list"
@@ -588,7 +733,7 @@ func updateViewHeat(view *viewState, now time.Time) bool {
 	previousHeat := view.Heat.Level
 	previousNotice := view.HeatNotice
 
-	elapsed := commandElapsed(view.State, now)
+	elapsed := view.Clock.Elapsed(now)
 	commandHeat := HeatForElapsed(elapsed)
 	view.CommandHeat = commandHeat
 	if view.MaxHeat < commandHeat.Level {
@@ -597,7 +742,7 @@ func updateViewHeat(view *viewState, now time.Time) bool {
 
 	activeLevel := commandHeat.Level
 	if view.RoundCatchUp {
-		activeLevel = RestartRampHeat(commandHeat.Level, view.RoundHeat, now.Sub(view.RoundStarted))
+		activeLevel = RestartRampHeat(commandHeat.Level, view.RoundHeat, view.GameTime.Sub(view.RoundStarted))
 	}
 	view.Heat = HeatByLevel(activeLevel)
 
@@ -622,16 +767,6 @@ func updateViewHeat(view *viewState, now time.Time) bool {
 		previousNotice != view.HeatNotice
 }
 
-func commandElapsed(state session.State, now time.Time) time.Duration {
-	if state.DurationMillis != nil {
-		return time.Duration(*state.DurationMillis) * time.Millisecond
-	}
-	if state.StartedAt == nil {
-		return 0
-	}
-	return now.Sub(*state.StartedAt)
-}
-
 func activeMoveInterval(view viewState, override time.Duration, now time.Time) time.Duration {
 	if override > 0 {
 		return override
@@ -646,6 +781,19 @@ func activeMoveInterval(view viewState, override time.Duration, now time.Time) t
 	return interval
 }
 
+func pauseLine(pause PauseState) string {
+	switch {
+	case pause.Manual && pause.Focus:
+		return "PAUSED - MANUAL + COMMAND FOCUS"
+	case pause.Focus:
+		return "PAUSED - COMMAND PANE ACTIVE"
+	case pause.Manual:
+		return "PAUSED - PRESS P TO RESUME"
+	default:
+		return ""
+	}
+}
+
 func heatTransitionText(heat HeatLevel) string {
 	return fmt.Sprintf("COMMAND HEAT RISING... SPEED %d  SCORE %s", heat.Level, heat.MultiplierText())
 }
@@ -656,7 +804,7 @@ func heatScoreLine(view viewState) string {
 		heat = HeatByLevel(1)
 	}
 	if view.Quest.Enabled() {
-		effects := view.Quest.effectHUDParts(time.Now())
+		effects := view.Quest.effectHUDParts(view.GameTime)
 		suffix := ""
 		if len(effects) > 0 {
 			suffix = "  " + joinParts(effects)

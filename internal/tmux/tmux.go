@@ -179,6 +179,35 @@ func (l Layout) DetachClients(info Info) error {
 	return nil
 }
 
+func (l Layout) GamePaneActive(info Info) (bool, error) {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = quietRunner()
+	}
+	outputRunner, ok := runner.(OutputRunner)
+	if !ok {
+		return false, fmt.Errorf("tmux runner cannot read pane focus")
+	}
+
+	output, err := outputRunner.Output(
+		tmuxPath,
+		"-f", "/dev/null",
+		"-L", info.SocketName,
+		"display-message",
+		"-p",
+		"-t", info.SessionName+":0.1",
+		"#{pane_active}",
+	)
+	if err != nil {
+		return false, fmt.Errorf("read game pane focus: %w", err)
+	}
+	return strings.TrimSpace(string(output)) == "1", nil
+}
+
 func (l Layout) CaptureCommandPane(info Info) (string, bool, error) {
 	tmuxPath := l.TmuxPath
 	if tmuxPath == "" {

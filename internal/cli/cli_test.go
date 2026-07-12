@@ -324,6 +324,9 @@ func TestRunGameShellConfiguresProductionRandomSource(t *testing.T) {
 	if captured.ReadState == nil {
 		t.Fatal("game shell ReadState = nil")
 	}
+	if captured.ReadFocus == nil {
+		t.Fatal("game shell ReadFocus = nil")
+	}
 }
 
 func TestRunListShowsMetadataWithoutCommandArguments(t *testing.T) {

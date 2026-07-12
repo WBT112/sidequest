@@ -186,6 +186,24 @@ func TestCaptureCommandPaneReadsPlainCommandPaneOutput(t *testing.T) {
 	}
 }
 
+func TestGamePaneActiveReadsOwnedGamePane(t *testing.T) {
+	runner := &recordingRunner{output: "1\n"}
+	layout := Layout{CommandRunner: runner}
+	info := Info{SocketName: "sidequest-abc123", SessionName: "sidequest-abc123"}
+
+	active, err := layout.GamePaneActive(info)
+	if err != nil {
+		t.Fatalf("GamePaneActive returned error: %v", err)
+	}
+	if !active {
+		t.Fatal("GamePaneActive = false, want true")
+	}
+	want := []string{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "display-message", "-p", "-t", "sidequest-abc123:0.1", "#{pane_active}"}
+	if !equalStrings(runner.outputCalls[0], want) {
+		t.Fatalf("focus call = %#v, want %#v", runner.outputCalls[0], want)
+	}
+}
+
 func TestHasSessionUsesIsolatedServer(t *testing.T) {
 	runner := &recordingRunner{}
 	layout := Layout{CommandRunner: runner}

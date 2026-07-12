@@ -537,6 +537,18 @@ func (a App) runGameShell(statePath string) error {
 		ReadState: func() (session.State, error) {
 			return session.ReadState(runtimeSession)
 		},
+		ReadFocus: func() (bool, error) {
+			state, err := session.ReadState(runtimeSession)
+			if err != nil {
+				return false, err
+			}
+			record := session.Record{Session: runtimeSession, State: state}
+			info, owned := ownedInfoFromRecord(record)
+			if !owned {
+				return false, fmt.Errorf("invalid Sidequest tmux metadata")
+			}
+			return tmux.Layout{}.GamePaneActive(info)
+		},
 		OnQuitActive: func() error {
 			state, err := session.ReadState(runtimeSession)
 			if err != nil {

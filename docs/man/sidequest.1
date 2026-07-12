@@ -30,9 +30,10 @@ The game pane is focused first and starts on the first move. When the command
 finishes, the game freezes and Sidequest shows the command state, exit code or
 signal, runtime, and final score.
 .PP
-Snake uses Command Heat. Heat rises with wrapped-command runtime, speeds up Snake
-movement, increases the food score multiplier, and is capped at the maximum Heat
-level. Restarted rounds ramp back toward the current command Heat.
+Snake uses Command Heat. Heat rises with accumulated active Snake playtime,
+speeds up Snake movement, increases the food score multiplier, and is capped at
+the maximum Heat level. Time spent before the first move, paused, detached,
+after round over, or focused in the command pane does not raise Heat.
 .PP
 The Snake arena is capped, centered in large panes, and rendered with two
 terminal columns per logical cell. Food placement prefers reachable cells within
@@ -86,7 +87,9 @@ Remove one stored Sidequest run after validating the local run directory.
 .SH CONTROLS
 .TP
 .B F12
-Switch between the game pane and the command pane.
+Switch between the game pane and the command pane. Snake focus-pauses while the
+command pane is active and resumes when the game pane is active again, unless it
+was manually paused.
 .TP
 .B F10
 Detach from the Sidequest tmux session and return to the shell. The session stays
@@ -97,7 +100,7 @@ attach command after tmux returns to the shell.
 Start and control Snake in the game pane.
 .TP
 .B P
-Pause or resume the game.
+Toggle manual pause. Manual pause is separate from command-pane focus pause.
 .TP
 .B R
 Restart Snake after a round over while the command is still running.

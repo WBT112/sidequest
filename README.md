@@ -26,13 +26,16 @@ sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i";
 
 - `WASD` or arrow keys move Snake.
 - `F12` switches between Snake and the command pane.
+- Snake focus-pauses while the command pane is active and resumes when the game
+  pane is active again, unless you paused manually.
 - `F10` detaches back to your shell. If the command is still running, Sidequest
   prints the `sidequest attach <id>` command.
 - `R` restarts Snake after a round over while the command keeps running.
 - `Q` leaves the game pane; finished sessions can then be cleaned up.
 
-Classic mode keeps Snake simple and adds Command Heat: the longer the wrapped
-command runs, the faster Snake gets and the more food is worth.
+Classic mode keeps Snake simple and adds Command Heat: the longer you actively
+play, the faster Snake gets and the more food is worth. Time spent in the
+command pane or on pause does not raise Heat.
 
 Quest mode adds combo scoring, one mission per command, Golden Bytes, random
 arena pickups, completion bonuses and local best-score tracking.

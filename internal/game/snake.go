@@ -101,6 +101,10 @@ func (g *SnakeGame) ChangeDirection(direction Direction) bool {
 	return true
 }
 
+func (g *SnakeGame) ClearPendingDirections() {
+	g.PendingDirs = nil
+}
+
 func (g *SnakeGame) Step() StepResult {
 	if g.Over {
 		return StepMoved
