@@ -4,7 +4,7 @@ Play Snake (other games maybe later) while a long-running terminal command keeps
 
 Sidequest runs your command in one tmux pane and focuses a small Snake game in
 another. The command stays visible, the game starts on your first move, and when
-the command finishes Sidequest ends the round. 
+the command finishes you can keep the same Snake round going.
 
 ## Installation
 
@@ -138,11 +138,13 @@ sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i";
 - `F10` detaches back to your shell. If the command is still running, Sidequest
   prints the `sidequest attach <id>` command.
 - `R` restarts Snake after a round over while the command keeps running.
-- `Q` quits only after the wrapped command has finished.
+- After the command finishes, `C` continues the current round and `Q` finalizes
+  and quits.
 
 Classic mode keeps Snake simple and adds Command Heat: the longer you actively
 play, the faster Snake gets and the more food is worth. Time spent in the
-command pane or on pause does not raise Heat.
+command pane or on pause does not raise Heat. After the command has finished,
+Heat stays frozen at the reached level while the round can continue.
 
 Quest mode adds combo scoring, one mission per command, Golden Bytes, random
 arena pickups and other stuff.

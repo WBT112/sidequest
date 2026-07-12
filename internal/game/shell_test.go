@@ -165,7 +165,7 @@ func TestRenderCentersQuestHUDLines(t *testing.T) {
 	}
 }
 
-func TestRunUpdatesQuestStatsWhenCommandFinishes(t *testing.T) {
+func TestRunUpdatesQuestStatsWhenCommandFinishIsQuit(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(80, 12)
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
@@ -193,6 +193,11 @@ func TestRunUpdatesQuestStatsWhenCommandFinishes(t *testing.T) {
 	waitForRenderedText(t, screen, "QUEST:")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
 	finished.Store(true)
+	waitForRenderedText(t, screen, "C Continue")
+	if _, err := os.Stat(filepath.Join(statsDir, statsFileName)); !os.IsNotExist(err) {
+		t.Fatalf("stats file exists before completion choice: %v", err)
+	}
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
 	waitForRenderedText(t, screen, "NEW HIGH SCORE")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 	waitForRenderedText(t, screen, "COMMAND FINISHED")
@@ -429,6 +434,104 @@ func TestRunFocusPauseStopsMovementAndResumesWithFullInterval(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
+func TestRunContinueAfterCommandFinishResumesSameRoundWithFullInterval(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(40, 12)
+	base := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	var nowNanos atomic.Int64
+	var completed atomic.Bool
+	nowNanos.Store(base.UnixNano())
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			if completed.Load() {
+				exitCode := 0
+				return session.State{Status: session.StatusCompleted, ExitCode: &exitCode}, nil
+			}
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: 20 * time.Millisecond,
+		GameInterval: 100 * time.Millisecond,
+		Now: func() time.Time {
+			return time.Unix(0, nowNanos.Load())
+		},
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	arena := arenaForScreen(screen)
+	nextHeads := []Point{
+		{X: arena.Width/2 + 1, Y: arena.Height / 2},
+		{X: arena.Width/2 + 2, Y: arena.Height / 2},
+	}
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
+	waitForRenderedText(t, screen, "Arrows/WASD move")
+
+	completed.Store(true)
+	waitForRenderedText(t, screen, "C Continue")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	waitForMissingRenderedText(t, screen, "C Continue")
+	waitForMissingRenderedText(t, screen, "FINAL SCORE")
+
+	nowNanos.Store(base.Add(90 * time.Millisecond).UnixNano())
+	time.Sleep(30 * time.Millisecond)
+	for _, point := range nextHeads {
+		main, _, _, _ := screen.GetContent(arena.CellX(point.X), arena.CellY(point.Y))
+		if main == tcell.RuneBlock {
+			t.Fatalf("snake moved before full post-command interval:\n%s", screenText(screen))
+		}
+	}
+
+	nowNanos.Store(base.Add(120 * time.Millisecond).UnixNano())
+	waitForAnyRenderedCell(t, screen, nextHeads, tcell.RuneBlock)
+	cancelShell(t, cancel, errc)
+}
+
+func TestRunContinueAfterCommandFinishFreezesCommandHeat(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(70, 12)
+	base := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	var nowNanos atomic.Int64
+	var completed atomic.Bool
+	nowNanos.Store(base.UnixNano())
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			if completed.Load() {
+				return session.State{Status: session.StatusCompleted}, nil
+			}
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: 20 * time.Millisecond,
+		GameInterval: time.Hour,
+		Now: func() time.Time {
+			return time.Unix(0, nowNanos.Load())
+		},
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
+	waitForRenderedText(t, screen, "Arrows/WASD move")
+	nowNanos.Store(base.Add(35 * time.Second).UnixNano())
+	waitForRenderedText(t, screen, "Heat: 2/6")
+
+	completed.Store(true)
+	waitForRenderedText(t, screen, "C Continue")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	nowNanos.Store(base.Add(70 * time.Second).UnixNano())
+	time.Sleep(30 * time.Millisecond)
+	if strings.Contains(screenText(screen), "Heat: 3/6") {
+		t.Fatalf("command heat increased after post-command continue:\n%s", screenText(screen))
+	}
+	waitForRenderedText(t, screen, "Heat: 2/6")
+	cancelShell(t, cancel, errc)
+}
+
 func TestRunManualPauseSurvivesFocusRoundTrip(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(60, 12)
@@ -553,20 +656,16 @@ func TestRunNonQualifyingScoreSkipsNameEntry(t *testing.T) {
 func TestRunCommandCompletionDuringNameEntryKeepsPendingScore(t *testing.T) {
 	screen := tcell.NewSimulationScreen("UTF-8")
 	screen.SetSize(40, 14)
-	states := make(chan session.State, 4)
-	states <- session.State{Status: session.StatusRunning}
-	states <- session.State{Status: session.StatusCompleted}
+	var completed atomic.Bool
 	statsDir := filepath.Join(t.TempDir(), "sidequest")
 
 	shell := Shell{
 		NewScreen: func() (tcell.Screen, error) { return screen, nil },
 		ReadState: func() (session.State, error) {
-			select {
-			case state := <-states:
-				return state, nil
-			default:
+			if completed.Load() {
 				return session.State{Status: session.StatusCompleted}, nil
 			}
+			return session.State{Status: session.StatusRunning}, nil
 		},
 		PollInterval: 20 * time.Millisecond,
 		GameInterval: 10 * time.Millisecond,
@@ -583,6 +682,7 @@ func TestRunCommandCompletionDuringNameEntryKeepsPendingScore(t *testing.T) {
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
 	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	completed.Store(true)
 	waitForRenderedText(t, screen, "Command state: completed")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'Z', tcell.ModNone))
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
@@ -601,7 +701,7 @@ func TestRunCommandCompletionDuringNameEntryKeepsPendingScore(t *testing.T) {
 	}
 }
 
-func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
+func TestRunShowsCompletionChoiceWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(70, 12)
 	exitCode := 0
@@ -628,9 +728,10 @@ func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 		errc <- shell.Run(context.Background())
 	}()
 
-	waitForRenderedText(t, screen, "Command finished  Q quit  F9 hide")
+	waitForRenderedText(t, screen, "Command finished  C continue  Q quit")
 	waitForRenderedText(t, screen, "COMMAND FINISHED")
-	waitForRenderedText(t, screen, "FINAL SCORE  0")
+	waitForRenderedText(t, screen, "C Continue")
+	waitForMissingRenderedText(t, screen, "FINAL SCORE")
 	waitForRenderedText(t, screen, "Exit code: 0")
 	waitForRenderedText(t, screen, "Runtime: 00:00:03")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
