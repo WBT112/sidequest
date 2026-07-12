@@ -9,7 +9,7 @@ the command finishes you can keep the same Snake round going.
 ## Installation
 
 Sidequest currently supports Linux `amd64` and `arm64`. Windows users should run
-Sidequest inside WSL 2. Native macOS is not supported yet.
+Sidequest inside WSL 2.
 
 Sidequest requires `tmux` at runtime:
 
@@ -70,12 +70,6 @@ sidequest --version
 
 PATH setup happens inside WSL, not in the Windows PATH.
 
-### macOS
-
-Native macOS is not supported yet. The application currently validates Linux
-terminals only, and release artifacts are built for Linux. macOS support needs a
-dedicated tmux/preflight test matrix before it is advertised.
-
 ### Build From Source
 
 ```bash
@@ -98,11 +92,11 @@ export PATH="$HOME/.local/bin:$PATH"
 ## Quick Start
 
 ```bash
+sidequest -- ssh deploy@example.com
+sidequest -- sh -c 'sudo du -xh /var /usr /home 2>/dev/null | sort -h'
+sidequest --mode quest -- make test
 sidequest -- codex
 sidequest -- claude "Run the test suite, fix any failures, and summarize the changes."
-sidequest -- gemini
-sidequest -- aider --message "Refactor the parser and run tests."
-sidequest --mode quest -- make test
 ```
 
 Try it with a harmless demo workload:
