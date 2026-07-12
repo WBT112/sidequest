@@ -11,9 +11,9 @@ the command finishes Sidequest ends the round.
 ```bash
 sidequest -- codex
 sidequest -- claude "Run the test suite, fix any failures, and summarize the changes."
-sidequest -- docker build .
+sidequest -- gemini
+sidequest -- aider --message "Refactor the parser and run tests."
 sidequest --mode quest -- make test
-sidequest -- sudo apt upgrade
 ```
 
 Try it with a harmless demo workload:
@@ -25,13 +25,14 @@ sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i";
 ## Gameplay
 
 - `WASD` or arrow keys move Snake.
+- `F9` hides or restores Sidequest while the command keeps running.
 - `F12` switches between Snake and the command pane.
 - Snake focus-pauses while the command pane is active and resumes when the game
   pane is active again, unless you paused manually.
 - `F10` detaches back to your shell. If the command is still running, Sidequest
   prints the `sidequest attach <id>` command.
 - `R` restarts Snake after a round over while the command keeps running.
-- `Q` leaves the game pane; finished sessions can then be cleaned up.
+- `Q` quits only after the wrapped command has finished.
 
 Classic mode keeps Snake simple and adds Command Heat: the longer you actively
 play, the faster Snake gets and the more food is worth. Time spent in the

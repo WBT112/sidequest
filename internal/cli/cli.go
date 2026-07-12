@@ -67,7 +67,6 @@ type App struct {
 	AttachSession  func(string) error
 	TmuxHasSession func(tmux.Info) bool
 	CloseTmux      func(tmux.Info) error
-	CloseGamePane  func(tmux.Info) error
 	DetachClients  func(tmux.Info) error
 	CapturePane    func(tmux.Info) (string, bool, error)
 	CleanupSession func(session.Session) error
@@ -547,19 +546,14 @@ func (a App) runGameShell(statePath string) error {
 			if !owned {
 				return false, fmt.Errorf("invalid Sidequest tmux metadata")
 			}
-			return tmux.Layout{}.GamePaneActive(info)
-		},
-		OnQuitActive: func() error {
-			state, err := session.ReadState(runtimeSession)
+			boss, err := tmux.Layout{}.BossState(info)
 			if err != nil {
-				return err
+				return false, err
 			}
-			record := session.Record{Session: runtimeSession, State: state}
-			info, owned := ownedInfoFromRecord(record)
-			if !owned {
-				return nil
+			if boss.Hidden {
+				return false, nil
 			}
-			return a.closeGamePane(info)
+			return tmux.Layout{}.GamePaneActive(info)
 		},
 		OnQuitTerminal: func() error {
 			state, err := session.ReadState(runtimeSession)
@@ -657,13 +651,6 @@ func (a App) closeTmux(info tmux.Info) error {
 		return a.CloseTmux(info)
 	}
 	return tmux.Layout{}.Close(info)
-}
-
-func (a App) closeGamePane(info tmux.Info) error {
-	if a.CloseGamePane != nil {
-		return a.CloseGamePane(info)
-	}
-	return tmux.Layout{}.CloseGamePane(info)
 }
 
 func (a App) detachClients(info tmux.Info) error {

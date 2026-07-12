@@ -35,6 +35,11 @@ speeds up Snake movement, increases the food score multiplier, and is capped at
 the maximum Heat level. Time spent before the first move, paused, detached,
 after round over, or focused in the command pane does not raise Heat.
 .PP
+.B F9
+hides or restores the Sidequest UI by zooming the command pane inside the
+isolated tmux session. The wrapped command and Snake state stay alive; gameplay
+timers pause while hidden.
+.PP
 Round results can enter persistent local TOP 5 lists. Classic and Quest Mode use
 separate leaderboards. A qualifying score opens a name-entry field in the result
 panel, prefilled from the local
@@ -93,6 +98,10 @@ or print it to standard output when no pager is configured.
 Remove one stored Sidequest run after validating the local run directory.
 .SH CONTROLS
 .TP
+.B F9
+Hide or restore Sidequest while keeping the wrapped command and Snake state
+alive.
+.TP
 .B F12
 Switch between the game pane and the command pane. Snake focus-pauses while the
 command pane is active and resumes when the game pane is active again, unless it
@@ -113,8 +122,12 @@ Toggle manual pause. Manual pause is separate from command-pane focus pause.
 Restart Snake after a round over while the command is still running.
 .TP
 .B Q
-Leave the game pane. The command pane is not killed; finished sessions can then
-be cleaned up.
+Quit only after the wrapped command has reached a terminal state. During a
+running command, use
+.B F9
+to hide Sidequest or
+.B F10
+to detach.
 .SH HIGHSCORES
 Sidequest keeps at most five scores per mode. Scores are sorted descending and
 equal scores keep deterministic insertion order. The result panel marks the

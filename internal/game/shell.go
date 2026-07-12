@@ -70,7 +70,6 @@ type Shell struct {
 	NewScreen      func() (tcell.Screen, error)
 	ReadState      StateReader
 	ReadFocus      FocusReader
-	OnQuitActive   func() error
 	OnQuitTerminal func() error
 	Random         RandomSource
 	StatsManager   StatsManager
@@ -200,7 +199,7 @@ func (s Shell) Run(ctx context.Context) error {
 					}
 				}
 				switch {
-				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'q' || typed.Rune() == 'Q'):
+				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'q' || typed.Rune() == 'Q') && session.IsTerminalStatus(view.SessionState):
 					return s.quit(view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'p' || typed.Rune() == 'P'):
 					now := s.now()
@@ -388,9 +387,6 @@ func (s Shell) quit(view viewState) error {
 	if session.IsTerminalStatus(view.SessionState) && s.OnQuitTerminal != nil {
 		return s.OnQuitTerminal()
 	}
-	if !session.IsTerminalStatus(view.SessionState) && s.OnQuitActive != nil {
-		return s.OnQuitActive()
-	}
 	return nil
 }
 
@@ -448,8 +444,11 @@ func (s Shell) handlePendingHighscoreKey(view *viewState, event *tcell.EventKey)
 		confirmPendingHighscore(view, s.statsManager())
 		return false, true
 	case tcell.KeyEscape:
-		confirmPendingHighscore(view, s.statsManager())
-		return true, true
+		if session.IsTerminalStatus(view.SessionState) {
+			confirmPendingHighscore(view, s.statsManager())
+			return true, true
+		}
+		return false, true
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if pending.ReplaceOnType {
 			pending.Input = ""
@@ -472,8 +471,11 @@ func (s Shell) handlePendingHighscoreKey(view *viewState, event *tcell.EventKey)
 	case tcell.KeyRune:
 		r := event.Rune()
 		if r == 'q' || r == 'Q' {
-			confirmPendingHighscore(view, s.statsManager())
-			return true, true
+			if session.IsTerminalStatus(view.SessionState) {
+				confirmPendingHighscore(view, s.statsManager())
+				return true, true
+			}
+			return false, true
 		}
 		if r == 'r' || r == 'R' || r == 'p' || r == 'P' {
 			return false, true
@@ -604,18 +606,18 @@ func render(screen tcell.Screen, view viewState) {
 	drawBox(screen, 0, 0, width, height, style)
 	drawPlayfield(screen, style)
 
-	controlLine := "Arrows/WASD start. F12 command. F10 detach/list."
+	controlLine := "Arrows/WASD start  F9 hide  F12 command  F10 detach"
 	if view.Started {
-		controlLine = "Arrows/WASD move  P pause/resume  Q exit/cleanup  F10 detach/list"
+		controlLine = "Arrows/WASD move  P pause  F9 hide  F10 detach  F12 command"
 	}
 	if view.Pause.Active() {
 		controlLine = pauseLine(view.Pause)
 	}
 	if view.Frozen {
-		controlLine = "Command finished. Q exit/cleanup  F10 detach/list"
+		controlLine = "Command finished  Q quit  F9 hide  F10 detach"
 	}
 	if view.Game != nil && view.Game.Over && !view.Frozen {
-		controlLine = "Round over. R restart  Q exit/cleanup  F10 detach/list"
+		controlLine = "Round over  R restart  F9 hide  F10 detach"
 	}
 	if view.Quest.Enabled() && view.PendingScore == nil && !view.Frozen && (view.Game == nil || !view.Game.Over) {
 		controlLine = questLine(view)
@@ -624,7 +626,10 @@ func render(screen tcell.Screen, view viewState) {
 		controlLine = view.HeatNotice
 	}
 	if view.PendingScore != nil {
-		controlLine = "New high score. Type name  Enter confirm  Q save+exit"
+		controlLine = "New high score. Type name  Enter confirm  F9 hide"
+		if session.IsTerminalStatus(view.SessionState) {
+			controlLine = "New high score. Type name  Enter confirm  Q save+exit"
+		}
 	}
 
 	lines := []renderLine{
@@ -890,7 +895,7 @@ func resultPanelLines(view viewState, maxWidth int) []string {
 	}
 
 	title := "GAME OVER"
-	action := "R Restart     Q Quit"
+	action := "R Restart     F9 Hide"
 	if view.Frozen {
 		title = "COMMAND FINISHED"
 		action = "Q Quit"

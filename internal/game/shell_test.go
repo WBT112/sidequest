@@ -4,6 +4,7 @@ package game
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,20 +29,35 @@ func TestRunInitializesAndFinalizesScreenOnQuit(t *testing.T) {
 		PollInterval: time.Hour,
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Command state: running")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 	if !screen.finiCalled {
 		t.Fatal("screen Fini was not called")
 	}
+}
+
+func TestRunIgnoresActiveQForRunningCommand(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(60, 12)
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: time.Hour,
+	}
+
+	cancel, errc := runShellCancellable(shell)
+	waitForRenderedText(t, screen, "F9 hide")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+	select {
+	case err := <-errc:
+		t.Fatalf("Run returned after active Q: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunTogglesPause(t *testing.T) {
@@ -56,19 +72,12 @@ func TestRunTogglesPause(t *testing.T) {
 		PollInterval: time.Hour,
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Command state: running")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone))
 	waitForRenderedText(t, screen, "PAUSED - PRESS P TO RESUME")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunDoesNotIncreaseHeatBeforeActivePlay(t *testing.T) {
@@ -85,18 +94,11 @@ func TestRunDoesNotIncreaseHeatBeforeActivePlay(t *testing.T) {
 		Now:          func() time.Time { return now },
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Heat: 1/6")
 	waitForRenderedText(t, screen, "Score x1.0")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunDisplaysQuestModeHUD(t *testing.T) {
@@ -112,19 +114,12 @@ func TestRunDisplaysQuestModeHUD(t *testing.T) {
 		Now:          func() time.Time { return now },
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Sidequest Snake [quest]")
 	waitForRenderedText(t, screen, "COMBO x0")
 	waitForRenderedText(t, screen, "QUEST:")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunUpdatesQuestStatsWhenCommandFinishes(t *testing.T) {
@@ -153,20 +148,13 @@ func TestRunUpdatesQuestStatsWhenCommandFinishes(t *testing.T) {
 		Now: func() time.Time { return now },
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "COMMAND FINISHED")
 	if _, err := os.Stat(filepath.Join(statsDir, statsFileName)); err != nil {
 		t.Fatalf("stats file was not written: %v", err)
 	}
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunDoesNotWarnBeforeHeatRisesWithoutActivePlay(t *testing.T) {
@@ -183,20 +171,13 @@ func TestRunDoesNotWarnBeforeHeatRisesWithoutActivePlay(t *testing.T) {
 		Now:          func() time.Time { return now },
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Heat: 1/6")
 	if strings.Contains(screenText(screen), "COMMAND HEAT RISING") {
 		t.Fatalf("heat warning appeared before active play:\n%s", screenText(screen))
 	}
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunFreezesCommandHeatWhenCommandAlreadyFinished(t *testing.T) {
@@ -213,67 +194,23 @@ func TestRunFreezesCommandHeatWhenCommandAlreadyFinished(t *testing.T) {
 		Now:          func() time.Time { return now },
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Heat: 1/6")
 	if strings.Contains(screenText(screen), "Heat: 2/6") {
 		t.Fatalf("finished command heat kept progressing:\n%s", screenText(screen))
 	}
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-}
-
-func TestRunCallsActiveQuitHookForRunningCommand(t *testing.T) {
-	screen := tcell.NewSimulationScreen("")
-	screen.SetSize(40, 10)
-	called := false
-	shell := Shell{
-		NewScreen: func() (tcell.Screen, error) { return screen, nil },
-		ReadState: func() (session.State, error) {
-			return session.State{Status: session.StatusRunning}, nil
-		},
-		OnQuitActive: func() error {
-			called = true
-			return nil
-		},
-		PollInterval: time.Hour,
-	}
-
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
-
-	waitForRenderedText(t, screen, "F10 detach/list")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if !called {
-		t.Fatal("OnQuitActive was not called")
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunCallsTerminalQuitHookForFinishedCommand(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(40, 10)
-	activeCalled := false
 	terminalCalled := false
 	shell := Shell{
 		NewScreen: func() (tcell.Screen, error) { return screen, nil },
 		ReadState: func() (session.State, error) {
 			return session.State{Status: session.StatusCompleted}, nil
-		},
-		OnQuitActive: func() error {
-			activeCalled = true
-			return nil
 		},
 		OnQuitTerminal: func() error {
 			terminalCalled = true
@@ -287,7 +224,7 @@ func TestRunCallsTerminalQuitHookForFinishedCommand(t *testing.T) {
 		errc <- shell.Run(context.Background())
 	}()
 
-	waitForRenderedText(t, screen, "Q exit/cleanup")
+	waitForRenderedText(t, screen, "Command finished  Q quit  F9 hide")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
 
 	if err := <-errc; err != nil {
@@ -295,9 +232,6 @@ func TestRunCallsTerminalQuitHookForFinishedCommand(t *testing.T) {
 	}
 	if !terminalCalled {
 		t.Fatal("OnQuitTerminal was not called")
-	}
-	if activeCalled {
-		t.Fatal("OnQuitActive was called for terminal state")
 	}
 }
 
@@ -317,10 +251,7 @@ func TestRunWaitsForFirstMoveBeforeStartingSnake(t *testing.T) {
 		},
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	time.Sleep(80 * time.Millisecond)
@@ -330,11 +261,7 @@ func TestRunWaitsForFirstMoveBeforeStartingSnake(t *testing.T) {
 
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
 	waitForRenderedText(t, screen, "NEW HIGH SCORE")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
@@ -353,10 +280,7 @@ func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
 		},
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
@@ -367,11 +291,7 @@ func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	waitForMissingRenderedText(t, screen, "Round over")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunDirectionInputDoesNotPostponeNextMove(t *testing.T) {
@@ -393,10 +313,7 @@ func TestRunDirectionInputDoesNotPostponeNextMove(t *testing.T) {
 		},
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	arena := arenaForScreen(screen)
@@ -410,11 +327,7 @@ func TestRunDirectionInputDoesNotPostponeNextMove(t *testing.T) {
 	nowNanos.Store(base.Add(105 * time.Millisecond).UnixNano())
 
 	waitForRenderedCell(t, screen, nextHead, tcell.RuneBlock)
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunFocusPauseStopsMovementAndResumesWithFullInterval(t *testing.T) {
@@ -441,10 +354,7 @@ func TestRunFocusPauseStopsMovementAndResumesWithFullInterval(t *testing.T) {
 		},
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	arena := arenaForScreen(screen)
@@ -471,11 +381,7 @@ func TestRunFocusPauseStopsMovementAndResumesWithFullInterval(t *testing.T) {
 
 	nowNanos.Store(base.Add(370 * time.Millisecond).UnixNano())
 	waitForAnyRenderedCell(t, screen, nextHeads, tcell.RuneBlock)
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunManualPauseSurvivesFocusRoundTrip(t *testing.T) {
@@ -495,10 +401,7 @@ func TestRunManualPauseSurvivesFocusRoundTrip(t *testing.T) {
 		PollInterval: time.Hour,
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Command state: running")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone))
@@ -507,11 +410,7 @@ func TestRunManualPauseSurvivesFocusRoundTrip(t *testing.T) {
 	waitForRenderedText(t, screen, "PAUSED - MANUAL + COMMAND FOCUS")
 	focusActive.Store(true)
 	waitForRenderedText(t, screen, "PAUSED - PRESS P TO RESUME")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunShowsCenteredResultPanelAfterRoundOver(t *testing.T) {
@@ -530,10 +429,7 @@ func TestRunShowsCenteredResultPanelAfterRoundOver(t *testing.T) {
 		},
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
@@ -543,11 +439,7 @@ func TestRunShowsCenteredResultPanelAfterRoundOver(t *testing.T) {
 	waitForRenderedText(t, screen, "FINAL SCORE  0")
 	waitForRenderedText(t, screen, "TOP 5")
 	waitForRenderedText(t, screen, "R Restart")
-
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunHighscoreNameEntryReplacesDefaultAndPersists(t *testing.T) {
@@ -567,10 +459,7 @@ func TestRunHighscoreNameEntryReplacesDefaultAndPersists(t *testing.T) {
 		},
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
@@ -580,11 +469,7 @@ func TestRunHighscoreNameEntryReplacesDefaultAndPersists(t *testing.T) {
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'X', tcell.ModNone))
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 	waitForRenderedText(t, screen, "ALX")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 	entries := (StatsManager{BaseDir: statsDir}).Leaderboard(GameModeClassic)
 	if len(entries) != 1 || entries[0].PlayerName != "ALX" {
 		t.Fatalf("leaderboard = %#v, want ALX entry", entries)
@@ -611,20 +496,13 @@ func TestRunNonQualifyingScoreSkipsNameEntry(t *testing.T) {
 		StatsManager: manager,
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
 	waitForRenderedText(t, screen, "GAME OVER")
 	waitForMissingRenderedText(t, screen, "NEW HIGH SCORE")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunCommandCompletionDuringNameEntryKeepsPendingScore(t *testing.T) {
@@ -705,7 +583,7 @@ func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 		errc <- shell.Run(context.Background())
 	}()
 
-	waitForRenderedText(t, screen, "Command finished. Q exit/cleanup")
+	waitForRenderedText(t, screen, "Command finished  Q quit  F9 hide")
 	waitForRenderedText(t, screen, "COMMAND FINISHED")
 	waitForRenderedText(t, screen, "FINAL SCORE  0")
 	waitForRenderedText(t, screen, "Exit code: 0")
@@ -729,20 +607,13 @@ func TestRunHandlesResize(t *testing.T) {
 		PollInterval: time.Hour,
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Sidequest")
 	screen.SetSize(80, 20)
 	screen.PostEvent(tcell.NewEventResize(80, 20))
 	waitForRenderedText(t, screen, "Command state: running")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunDrawsColoredPlayfieldWithThickWalls(t *testing.T) {
@@ -757,10 +628,7 @@ func TestRunDrawsColoredPlayfieldWithThickWalls(t *testing.T) {
 		PollInterval: time.Hour,
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
+	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	topWall, _, topStyle, _ := screen.GetContent(20, 4)
@@ -778,10 +646,7 @@ func TestRunDrawsColoredPlayfieldWithThickWalls(t *testing.T) {
 		t.Fatalf("inside cell = %q background=%v, want colored playfield", inside, insideBackground)
 	}
 
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	cancelShell(t, cancel, errc)
 }
 
 func TestTerminalState(t *testing.T) {
@@ -844,6 +709,23 @@ func TestUpdateViewHeatUsesActivePlayClock(t *testing.T) {
 
 	if view.Heat.Level != 3 {
 		t.Fatalf("Heat level = %d, want active-play level 3", view.Heat.Level)
+	}
+}
+
+func runShellCancellable(shell Shell) (context.CancelFunc, chan error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(ctx)
+	}()
+	return cancel, errc
+}
+
+func cancelShell(t *testing.T, cancel context.CancelFunc, errc <-chan error) {
+	t.Helper()
+	cancel()
+	if err := <-errc; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned error %v, want context canceled", err)
 	}
 }
 
