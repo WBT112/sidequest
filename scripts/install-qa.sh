@@ -83,11 +83,70 @@ grep -F "$path_line" "$PROFILE" >/dev/null || fail "shell profile is missing PAT
 run_install --update-path >/dev/null
 [ "$(grep -Fxc "$path_line" "$PROFILE")" -eq 1 ] || fail "reinstall duplicated the PATH line"
 
+profile_target="$TMPDIR/profile-target"
+printf 'do not touch\n' >"$profile_target"
+rm -f "$PROFILE"
+ln -s "$profile_target" "$PROFILE"
+if run_install --update-path >/dev/null 2>&1; then
+	fail "installer accepted a symlinked shell profile"
+fi
+grep -Fx "do not touch" "$profile_target" >/dev/null || fail "symlinked shell profile target was modified"
+rm -f "$PROFILE"
+
 custom_dir="$TMPDIR/custom-bin"
 if HOME="$HOME_DIR" SHELL=/bin/bash SIDEQUEST_VERSION="$VERSION" SIDEQUEST_DOWNLOAD_BASE_URL="$ASSETS" SIDEQUEST_INSTALL_DIR="$custom_dir" SIDEQUEST_TEST_UNAME_S=Linux SIDEQUEST_TEST_UNAME_M=amd64 sh "$INSTALLER" --update-path >/dev/null 2>&1; then
 	fail "installer accepted --update-path with a custom installation directory"
 fi
 [ ! -e "$custom_dir/sidequest" ] || fail "installer wrote the binary before rejecting custom PATH setup"
+
+precreated_tmp="$INSTALL_DIR/.sidequest.$$"
+printf 'preexisting temp\n' >"$precreated_tmp"
+run_install >/dev/null
+grep -Fx "preexisting temp" "$precreated_tmp" >/dev/null || fail "installer overwrote predictable temporary target"
+
+target_symlink_dir="$TMPDIR/target-symlink-bin"
+mkdir "$target_symlink_dir"
+ln -s "$profile_target" "$target_symlink_dir/sidequest"
+if SIDEQUEST_VERSION="$VERSION" SIDEQUEST_DOWNLOAD_BASE_URL="$ASSETS" SIDEQUEST_INSTALL_DIR="$target_symlink_dir" SIDEQUEST_TEST_UNAME_S=Linux SIDEQUEST_TEST_UNAME_M=amd64 sh "$INSTALLER" >/dev/null 2>&1; then
+	fail "installer accepted symlinked sidequest target"
+fi
+
+install_real_dir="$TMPDIR/install-real"
+install_symlink_dir="$TMPDIR/install-link"
+mkdir "$install_real_dir"
+ln -s "$install_real_dir" "$install_symlink_dir"
+if SIDEQUEST_VERSION="$VERSION" SIDEQUEST_DOWNLOAD_BASE_URL="$ASSETS" SIDEQUEST_INSTALL_DIR="$install_symlink_dir" SIDEQUEST_TEST_UNAME_S=Linux SIDEQUEST_TEST_UNAME_M=amd64 sh "$INSTALLER" >/dev/null 2>&1; then
+	fail "installer accepted symlinked installation directory"
+fi
+
+unsafe_dir="$TMPDIR/unsafe-bin"
+mkdir "$unsafe_dir"
+chmod 777 "$unsafe_dir"
+if SIDEQUEST_VERSION="$VERSION" SIDEQUEST_DOWNLOAD_BASE_URL="$ASSETS" SIDEQUEST_INSTALL_DIR="$unsafe_dir" SIDEQUEST_TEST_UNAME_S=Linux SIDEQUEST_TEST_UNAME_M=amd64 sh "$INSTALLER" >/dev/null 2>&1; then
+	fail "installer accepted group/world-writable installation directory"
+fi
+chmod 755 "$unsafe_dir"
+
+target_directory="$TMPDIR/target-directory-bin"
+mkdir -p "$target_directory/sidequest"
+if SIDEQUEST_VERSION="$VERSION" SIDEQUEST_DOWNLOAD_BASE_URL="$ASSETS" SIDEQUEST_INSTALL_DIR="$target_directory" SIDEQUEST_TEST_UNAME_S=Linux SIDEQUEST_TEST_UNAME_M=amd64 sh "$INSTALLER" >/dev/null 2>&1; then
+	fail "installer accepted existing sidequest directory target"
+fi
+
+failing_mv_bin="$TMPDIR/failing-mv-bin"
+failing_install_dir="$TMPDIR/failing-install-bin"
+mkdir "$failing_mv_bin" "$failing_install_dir"
+cat >"$failing_mv_bin/mv" <<'SH'
+#!/usr/bin/env sh
+exit 1
+SH
+chmod 755 "$failing_mv_bin/mv"
+if HOME="$HOME_DIR" SHELL=/bin/bash SIDEQUEST_VERSION="$VERSION" SIDEQUEST_DOWNLOAD_BASE_URL="$ASSETS" SIDEQUEST_INSTALL_DIR="$failing_install_dir" SIDEQUEST_TEST_UNAME_S=Linux SIDEQUEST_TEST_UNAME_M=amd64 PATH="$failing_mv_bin:/usr/bin:/bin" sh "$INSTALLER" >/dev/null 2>&1; then
+	fail "installer succeeded when atomic rename failed"
+fi
+if find "$failing_install_dir" -name '.sidequest.*' -print | grep . >/dev/null 2>&1; then
+	fail "installer left temporary binary behind after failed rename"
+fi
 
 bad_assets="$TMPDIR/bad-assets"
 mkdir "$bad_assets"

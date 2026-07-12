@@ -60,6 +60,10 @@ gh attestation verify sidequest_0.2.0_linux_amd64.tar.gz --repo WBT112/sidequest
 gh attestation verify install.sh --repo WBT112/sidequest
 ```
 
+Install and run Sidequest without `sudo` by default. Use elevated privileges
+only when you intentionally install into a system directory such as
+`/usr/local/bin`; do not combine `sudo` with `--update-path`.
+
 To install elsewhere:
 
 ```bash

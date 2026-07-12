@@ -6,6 +6,8 @@ VERSION="${SIDEQUEST_VERSION:-}"
 INSTALL_DIR="${SIDEQUEST_INSTALL_DIR:-${HOME:-}/.local/bin}"
 DOWNLOAD_BASE_URL="${SIDEQUEST_DOWNLOAD_BASE_URL:-}"
 UPDATE_PATH="${SIDEQUEST_UPDATE_PATH:-0}"
+INSTALL_TMP_TARGET=""
+PROFILE_TMP_TARGET=""
 
 fail() {
 	printf 'sidequest install: %s\n' "$*" >&2
@@ -51,6 +53,96 @@ done
 
 need_cmd() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+cleanup() {
+	if [ "$INSTALL_TMP_TARGET" ]; then
+		rm -f "$INSTALL_TMP_TARGET"
+	fi
+	if [ "$PROFILE_TMP_TARGET" ]; then
+		rm -f "$PROFILE_TMP_TARGET"
+	fi
+	rm -rf "$TMPDIR"
+}
+
+path_parent() {
+	case "$1" in
+		*/*)
+			parent="${1%/*}"
+			[ "$parent" ] || parent="/"
+			printf '%s\n' "$parent"
+			;;
+		*)
+			printf '.\n'
+			;;
+	esac
+}
+
+existing_parent() {
+	existing_path="$1"
+	while [ ! -e "$existing_path" ]; do
+		parent="$(path_parent "$existing_path")"
+		[ "$parent" != "$existing_path" ] || break
+		existing_path="$parent"
+	done
+	printf '%s\n' "$existing_path"
+}
+
+reject_symlink_path() {
+	symlink_path="$1"
+	while [ "$symlink_path" ] && [ "$symlink_path" != "." ] && [ "$symlink_path" != "/" ]; do
+		[ ! -L "$symlink_path" ] || fail "$symlink_path is a symlink; refusing to write through symlinked paths"
+		case "$symlink_path" in
+			*/*) symlink_path="$(path_parent "$symlink_path")" ;;
+			*) break ;;
+		esac
+	done
+	[ "$symlink_path" != "/" ] || [ ! -L / ] || fail "/ is a symlink; refusing to write through symlinked paths"
+}
+
+current_uid() {
+	id -u
+}
+
+path_uid() {
+	stat -c '%u' "$1" 2>/dev/null || fail "could not stat $1"
+}
+
+path_mode() {
+	stat -c '%a' "$1" 2>/dev/null || fail "could not stat $1"
+}
+
+validate_owned_by_current_user() {
+	owned_path="$1"
+	uid="$(current_uid)"
+	owner="$(path_uid "$owned_path")"
+	[ "$owner" = "$uid" ] || fail "$owned_path is owned by uid $owner, not current uid $uid"
+}
+
+mode_digit_is_writable() {
+	case "$1" in
+		2|3|6|7) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+validate_not_shared_writable_dir() {
+	mode_path="$1"
+	mode="$(path_mode "$mode_path")"
+	other_digit="${mode#${mode%?}}"
+	without_other="${mode%?}"
+	group_digit="${without_other#${without_other%?}}"
+	if mode_digit_is_writable "$group_digit" || mode_digit_is_writable "$other_digit"; then
+		fail "$mode_path is group- or world-writable; refusing unsafe installation directory"
+	fi
+}
+
+validate_safe_directory() {
+	dir_path="$1"
+	reject_symlink_path "$dir_path"
+	[ -d "$dir_path" ] || fail "$dir_path is not a directory"
+	validate_owned_by_current_user "$dir_path"
+	validate_not_shared_writable_dir "$dir_path"
 }
 
 uname_s() {
@@ -199,11 +291,21 @@ configure_path() {
 	default_install_dir="$HOME/.local/bin"
 	profile="$(shell_profile)"
 	profile_dir="${profile%/*}"
+	reject_symlink_path "$profile_dir"
+	validate_safe_directory "$(existing_parent "$profile_dir")"
 	mkdir -p "$profile_dir"
+	validate_safe_directory "$profile_dir"
+	[ ! -L "$profile" ] || fail "$profile is a symlink; refusing to update it"
 	if [ -e "$profile" ] && [ ! -f "$profile" ]; then
 		fail "$profile is not a regular file"
 	fi
-	touch "$profile"
+	if [ -e "$profile" ]; then
+		validate_owned_by_current_user "$profile"
+	else
+		PROFILE_TMP_TARGET="$(mktemp "$profile_dir/.sidequest-profile.XXXXXX")" || fail "could not create temporary shell profile"
+		mv "$PROFILE_TMP_TARGET" "$profile"
+		PROFILE_TMP_TARGET=""
+	fi
 
 	case "$(shell_name)" in
 		fish)
@@ -219,7 +321,12 @@ configure_path() {
 	if grep -F "$path_line" "$profile" >/dev/null 2>&1; then
 		printf '%s is already configured in %s\n' "$default_install_dir" "$profile"
 	else
-		printf '\n# Added by Sidequest installer\n%s\n' "$path_line" >>"$profile"
+		PROFILE_TMP_TARGET="$(mktemp "$profile_dir/.sidequest-profile.XXXXXX")" || fail "could not create temporary shell profile"
+		cat "$profile" >"$PROFILE_TMP_TARGET"
+		printf '\n# Added by Sidequest installer\n%s\n' "$path_line" >>"$PROFILE_TMP_TARGET"
+		chmod "$(path_mode "$profile")" "$PROFILE_TMP_TARGET"
+		mv "$PROFILE_TMP_TARGET" "$profile"
+		PROFILE_TMP_TARGET=""
 		printf 'Added %s to PATH in %s\n' "$default_install_dir" "$profile"
 	fi
 	printf 'Open a new terminal or reload the file with:\n  %s\n' "$reload_command"
@@ -228,17 +335,25 @@ configure_path() {
 install_binary() {
 	extracted="$1"
 	[ -f "$extracted/sidequest" ] || fail "archive did not contain sidequest binary"
-	[ ! -L "$INSTALL_DIR/sidequest" ] || fail "$INSTALL_DIR/sidequest is a symlink; refusing to replace it"
+	reject_symlink_path "$INSTALL_DIR"
+	validate_safe_directory "$(existing_parent "$INSTALL_DIR")"
 	mkdir -p "$INSTALL_DIR"
+	validate_safe_directory "$INSTALL_DIR"
+	target="$INSTALL_DIR/sidequest"
+	[ ! -L "$target" ] || fail "$target is a symlink; refusing to replace it"
+	if [ -e "$target" ] && [ ! -f "$target" ]; then
+		fail "$target is not a regular file"
+	fi
 	chmod 755 "$extracted/sidequest"
-	tmp_target="$INSTALL_DIR/.sidequest.$$"
-	cp "$extracted/sidequest" "$tmp_target"
-	chmod 755 "$tmp_target"
-	mv "$tmp_target" "$INSTALL_DIR/sidequest"
+	INSTALL_TMP_TARGET="$(mktemp "$INSTALL_DIR/.sidequest.XXXXXX")" || fail "could not create temporary binary in $INSTALL_DIR"
+	cp "$extracted/sidequest" "$INSTALL_TMP_TARGET"
+	chmod 755 "$INSTALL_TMP_TARGET"
+	mv "$INSTALL_TMP_TARGET" "$target"
+	INSTALL_TMP_TARGET=""
 }
 
 TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/sidequest-install.XXXXXX")"
-trap 'rm -rf "$TMPDIR"' EXIT INT HUP TERM
+trap cleanup EXIT INT HUP TERM
 
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
