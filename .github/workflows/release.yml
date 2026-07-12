@@ -68,12 +68,16 @@ jobs:
       - name: Test archive installer against built artifacts
         run: ./scripts/release-artifact-qa.sh dist
 
-      - name: Test DEB package in Ubuntu
+      - name: Test amd64 DEB package in Ubuntu
         run: |
+          deb_package="$(find "$PWD/dist" -maxdepth 1 -name 'sidequest_*_linux_amd64.deb' -print -quit)"
+          test -n "$deb_package"
           docker run --rm -v "$PWD/dist:/dist" ubuntu:24.04 sh -euxc '
             apt-get update
             apt-get install -y ca-certificates tmux
-            apt-get install -y /dist/*.deb
+            deb_package="$(find /dist -maxdepth 1 -name "sidequest_*_linux_amd64.deb" -print -quit)"
+            test -n "$deb_package"
+            apt-get install -y "$deb_package"
             sidequest --version
             sidequest --help >/dev/null
             dpkg -L sidequest | grep /usr/bin/sidequest
@@ -81,10 +85,14 @@ jobs:
             test ! -e /usr/bin/sidequest
           '
 
-      - name: Test RPM package in Fedora
+      - name: Test amd64 RPM package in Fedora
         run: |
+          rpm_package="$(find "$PWD/dist" -maxdepth 1 -name 'sidequest_*_linux_amd64.rpm' -print -quit)"
+          test -n "$rpm_package"
           docker run --rm -v "$PWD/dist:/dist" fedora:latest sh -euxc '
-            dnf install -y ca-certificates tmux /dist/*.rpm
+            rpm_package="$(find /dist -maxdepth 1 -name "sidequest_*_linux_amd64.rpm" -print -quit)"
+            test -n "$rpm_package"
+            dnf install -y ca-certificates tmux "$rpm_package"
             sidequest --version
             sidequest --help >/dev/null
             rpm -ql sidequest | grep /usr/bin/sidequest
