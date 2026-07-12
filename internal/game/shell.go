@@ -126,9 +126,6 @@ func (s Shell) Run(ctx context.Context) error {
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'p' || typed.Rune() == 'P'):
 					view.Paused = !view.Paused
 					render(screen, view)
-				case typed.Key() == tcell.KeyRune && typed.Rune() >= '1' && typed.Rune() <= '3' && view.Quest.Enabled() && len(view.Quest.PendingChoices) > 0:
-					view.Quest.ApplyUpgrade(int(typed.Rune()-'1'), s.now())
-					render(screen, view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'r' || typed.Rune() == 'R') && !view.Frozen && game.Over:
 					now := s.now()
 					game = newSnakeGameForScreen(screen)
@@ -155,6 +152,7 @@ func (s Shell) Run(ctx context.Context) error {
 				screen.Sync()
 				if !view.Frozen {
 					game.Resize(boardSize(screen))
+					view.Quest.ResizePickup(game)
 				}
 				render(screen, view)
 			}
@@ -164,7 +162,7 @@ func (s Shell) Run(ctx context.Context) error {
 			if view.Quest.Enabled() {
 				view.Quest.Tick(game, view.Heat, now)
 			}
-			if view.Started && !view.Paused && !view.Frozen && !game.Over && !upgradeSelectionActive(view) {
+			if view.Started && !view.Paused && !view.Frozen && !game.Over {
 				if now.Before(nextMove) {
 					if heatChanged {
 						render(screen, view)
@@ -173,10 +171,7 @@ func (s Shell) Run(ctx context.Context) error {
 				}
 				game.FoodScore = view.Heat.ScoreAward(baseFoodScore)
 				game.FoodHeat = view.Heat.Level
-				result := stepGame(game, view.Quest, view.Heat, now)
-				if (result == StepHitWall || result == StepHitSelf) && view.Quest.Enabled() && view.Quest.TryShieldRecovery(game) {
-					result = StepMoved
-				}
+				stepGame(game, view.Quest, view.Heat, now)
 				if game.Over && view.Quest.Enabled() {
 					view.Quest.OnCrash()
 				}
@@ -207,6 +202,13 @@ func (s Shell) Run(ctx context.Context) error {
 }
 
 func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time) StepResult {
+	if quest.Enabled() && quest.Pickup.Active && game.NextPoint() == quest.Pickup.Position {
+		result := game.Step()
+		if result == StepMoved {
+			quest.OnPickupCollected(game, heat, now)
+		}
+		return result
+	}
 	if quest.Enabled() && quest.Golden.Active && game.NextPoint() == quest.Golden.Position {
 		game.Food = quest.Golden.Position
 		result := game.Step()
@@ -218,6 +220,9 @@ func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time)
 	result := game.Step()
 	if result == StepAteFood && quest.Enabled() {
 		quest.OnNormalFood(game, heat, now)
+	}
+	if result == StepHitWall || result == StepHitSelf {
+		return quest.TryCollisionEffects(game, result, now)
 	}
 	return result
 }
@@ -244,10 +249,6 @@ func gameMode(mode string) string {
 		return GameModeQuest
 	}
 	return GameModeClassic
-}
-
-func upgradeSelectionActive(view viewState) bool {
-	return view.Quest.Enabled() && len(view.Quest.PendingChoices) > 0 && !view.Frozen
 }
 
 func (s Shell) now() time.Time {
@@ -309,9 +310,6 @@ func render(screen tcell.Screen, view viewState) {
 	if view.Quest.Enabled() {
 		controlLine = questLine(view)
 	}
-	if upgradeSelectionActive(view) {
-		controlLine = upgradeChoiceLine(view.Quest.PendingChoices)
-	}
 	if view.HeatNotice != "" {
 		controlLine = view.HeatNotice
 	}
@@ -335,6 +333,7 @@ func render(screen tcell.Screen, view viewState) {
 
 	drawSnake(screen, view.Game, style)
 	drawGoldenByte(screen, view.Quest, style)
+	drawPickup(screen, view.Quest, style)
 	drawResultPanel(screen, view, style)
 
 	for _, line := range lines {
@@ -439,6 +438,43 @@ func drawGoldenByte(screen tcell.Screen, quest *QuestState, baseStyle tcell.Styl
 	}
 	style := baseStyle.Foreground(tcell.ColorOrange).Background(tcell.ColorDarkSlateGray).Bold(true)
 	drawCell(screen, arena, point, "<>", style)
+}
+
+func drawPickup(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style) {
+	if !quest.Enabled() || !quest.Pickup.Active {
+		return
+	}
+	arena := arenaForScreen(screen)
+	point := quest.Pickup.Position
+	if point.X < 0 || point.X >= arena.Width || point.Y < 0 || point.Y >= arena.Height {
+		return
+	}
+	style := pickupStyle(baseStyle, quest.Pickup.Upgrade)
+	drawCell(screen, arena, point, PickupSymbol(quest.Pickup.Upgrade), style)
+}
+
+func pickupStyle(baseStyle tcell.Style, upgrade Upgrade) tcell.Style {
+	background := tcell.ColorDarkSlateGray
+	switch upgrade {
+	case UpgradeShield:
+		return baseStyle.Foreground(tcell.ColorAqua).Background(background).Bold(true)
+	case UpgradePhase:
+		return baseStyle.Foreground(tcell.ColorFuchsia).Background(background).Bold(true)
+	case UpgradeSlowClock:
+		return baseStyle.Foreground(tcell.ColorBlue).Background(background).Bold(true)
+	case UpgradeDoubleScore:
+		return baseStyle.Foreground(tcell.ColorLimeGreen).Background(background).Bold(true)
+	case UpgradePatch:
+		return baseStyle.Foreground(tcell.ColorWhite).Background(background).Bold(true)
+	case UpgradeComboKeeper:
+		return baseStyle.Foreground(tcell.ColorYellow).Background(background).Bold(true)
+	case UpgradeTurbo:
+		return baseStyle.Foreground(tcell.ColorAqua).Background(background).Bold(true)
+	case UpgradeWarp:
+		return baseStyle.Foreground(tcell.ColorPurple).Background(background).Bold(true)
+	default:
+		return baseStyle.Foreground(tcell.ColorWhite).Background(background).Bold(true)
+	}
 }
 
 func drawCell(screen tcell.Screen, arena Arena, point Point, text string, style tcell.Style) {
@@ -620,12 +656,18 @@ func heatScoreLine(view viewState) string {
 		heat = HeatByLevel(1)
 	}
 	if view.Quest.Enabled() {
+		effects := view.Quest.effectHUDParts(time.Now())
+		suffix := ""
+		if len(effects) > 0 {
+			suffix = "  " + joinParts(effects)
+		}
 		return fmt.Sprintf(
-			"SCORE %s  COMBO x%d  HEAT %d %s",
+			"SCORE %s  COMBO x%d  HEAT %d %s%s",
 			scoreText(view.Game),
 			view.Quest.Combo,
 			heat.Level,
 			heat.MultiplierText(),
+			suffix,
 		)
 	}
 	return fmt.Sprintf(
@@ -649,19 +691,13 @@ func questLine(view viewState) string {
 		return ""
 	}
 	quest := view.Quest
+	if quest.Message != "" {
+		return quest.Message
+	}
 	if quest.Mission.ID == "" {
 		return "QUEST: none"
 	}
 	return fmt.Sprintf("QUEST: %s %d/%d", quest.Mission.Label, quest.MissionProgress, quest.Mission.Target)
-}
-
-func upgradeChoiceLine(choices []UpgradeChoice) string {
-	parts := make([]string, 0, len(choices)+1)
-	parts = append(parts, "CHOOSE")
-	for index, choice := range choices {
-		parts = append(parts, fmt.Sprintf("%d %s", index+1, choice.Label))
-	}
-	return joinParts(parts)
 }
 
 func directionFromKey(event *tcell.EventKey) (Direction, bool) {

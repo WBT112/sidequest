@@ -163,6 +163,75 @@ func (g *SnakeGame) PlaceFood() bool {
 	return false
 }
 
+func (g *SnakeGame) Occupies(point Point) bool {
+	for _, snakePoint := range g.Snake {
+		if snakePoint == point {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *SnakeGame) TrimTail(limit int, minimumLength int) int {
+	if limit <= 0 || len(g.Snake) <= minimumLength {
+		return 0
+	}
+	removable := len(g.Snake) - minimumLength
+	if removable > limit {
+		removable = limit
+	}
+	g.Snake = g.Snake[:len(g.Snake)-removable]
+	return removable
+}
+
+func (g *SnakeGame) PhaseForward() bool {
+	if len(g.Snake) == 0 {
+		return false
+	}
+	direction := g.nextDirection()
+	delta := directionDelta(direction)
+	head := g.Snake[0]
+	target := Point{X: head.X + delta.X, Y: head.Y + delta.Y}
+	if target.X < 0 {
+		target.X = g.Width - 1
+	}
+	if target.X >= g.Width {
+		target.X = 0
+	}
+	if target.Y < 0 {
+		target.Y = g.Height - 1
+	}
+	if target.Y >= g.Height {
+		target.Y = 0
+	}
+	for steps := 0; steps < g.Width*g.Height; steps++ {
+		if target.X < 0 || target.X >= g.Width || target.Y < 0 || target.Y >= g.Height {
+			return false
+		}
+		if target != head && !g.collidesWithSnake(target, false) {
+			g.Dir = direction
+			g.PendingDirs = nil
+			g.Snake = append([]Point{target}, g.Snake...)
+			g.Snake = g.Snake[:len(g.Snake)-1]
+			g.Over = false
+			return true
+		}
+		target = Point{X: target.X + delta.X, Y: target.Y + delta.Y}
+	}
+	return false
+}
+
+func (g *SnakeGame) WarpToFreePoint(random RandomSource, extraOccupied []Point) bool {
+	point, ok := freePoint(g, random, extraOccupied)
+	if !ok {
+		return false
+	}
+	g.Snake = []Point{point}
+	g.PendingDirs = nil
+	g.Over = false
+	return true
+}
+
 func (g *SnakeGame) collidesWithSnake(point Point, willGrow bool) bool {
 	limit := len(g.Snake)
 	if !willGrow {

@@ -2,7 +2,6 @@ package game
 
 import (
 	"fmt"
-	"sort"
 	"time"
 )
 
@@ -10,15 +9,28 @@ const (
 	GameModeClassic = "classic"
 	GameModeQuest   = "quest"
 
-	comboWindow        = 8 * time.Second
-	goldenByteTTL      = 12 * time.Second
-	goldenByteBase     = 100
-	missionBonus       = 500
-	survivalBonus      = 500
-	maxComboBonusUnit  = 100
-	maxHeatBonusUnit   = 100
-	slowClockDuration  = 20 * time.Second
-	normalMinimumSpeed = 180 * time.Millisecond
+	comboWindow         = 8 * time.Second
+	goldenByteTTL       = 12 * time.Second
+	goldenByteBase      = 100
+	pickupTTL           = 12 * time.Second
+	shieldDuration      = 30 * time.Second
+	phaseDuration       = 20 * time.Second
+	slowClockDuration   = 15 * time.Second
+	doubleScoreDuration = 30 * time.Second
+	comboKeeperDuration = 20 * time.Second
+	turboDuration       = 10 * time.Second
+	warpDuration        = 25 * time.Second
+	missionBonus        = 500
+	survivalBonus       = 500
+	maxComboBonusUnit   = 100
+	maxHeatBonusUnit    = 100
+	normalMinimumSpeed  = 180 * time.Millisecond
+	turboMinimumSpeed   = 70 * time.Millisecond
+	turboScorePermille  = 1250
+	doubleScoreCharges  = 3
+	doubleScoreCap      = 6
+	patchRemoveLimit    = 3
+	minimumSnakeLength  = 1
 )
 
 type RandomSource interface {
@@ -28,10 +40,42 @@ type RandomSource interface {
 type Upgrade string
 
 const (
-	UpgradeShield     Upgrade = "Shield"
-	UpgradeSlowClock  Upgrade = "Slow Clock"
-	UpgradeDoubleByte Upgrade = "Double Byte"
+	UpgradeShield      Upgrade = "Shield"
+	UpgradePhase       Upgrade = "Phase"
+	UpgradeSlowClock   Upgrade = "Slow Clock"
+	UpgradeDoubleScore Upgrade = "Double Score"
+	UpgradePatch       Upgrade = "Patch"
+	UpgradeComboKeeper Upgrade = "Combo Keeper"
+	UpgradeTurbo       Upgrade = "Turbo"
+	UpgradeWarp        Upgrade = "Warp"
 )
+
+var pickupPool = []Upgrade{
+	UpgradeShield,
+	UpgradePhase,
+	UpgradeSlowClock,
+	UpgradeDoubleScore,
+	UpgradePatch,
+	UpgradeComboKeeper,
+	UpgradeTurbo,
+	UpgradeWarp,
+}
+
+type pickupDefinition struct {
+	Name   string
+	Symbol string
+}
+
+var pickupDefinitions = map[Upgrade]pickupDefinition{
+	UpgradeShield:      {Name: "Shield", Symbol: "[]"},
+	UpgradePhase:       {Name: "Phase", Symbol: "##"},
+	UpgradeSlowClock:   {Name: "Slow Clock", Symbol: "~~"},
+	UpgradeDoubleScore: {Name: "Double Score", Symbol: "x2"},
+	UpgradePatch:       {Name: "Patch", Symbol: "+-"},
+	UpgradeComboKeeper: {Name: "Combo Keeper", Symbol: "CK"},
+	UpgradeTurbo:       {Name: "Turbo", Symbol: ">>"},
+	UpgradeWarp:        {Name: "Warp", Symbol: "@@"},
+}
 
 type MissionID string
 
@@ -63,9 +107,16 @@ type GoldenByte struct {
 	Active    bool
 }
 
-type UpgradeChoice struct {
-	Upgrade Upgrade
-	Label   string
+type UpgradePickup struct {
+	Upgrade   Upgrade
+	Position  Point
+	ExpiresAt time.Time
+	Active    bool
+}
+
+type TimedCharge struct {
+	Charges   int
+	ExpiresAt time.Time
 }
 
 type ScoreBreakdown struct {
@@ -99,10 +150,17 @@ type QuestState struct {
 	MissionAwarded   bool
 	MaxHeat          int
 
-	PendingChoices []UpgradeChoice
-	ShieldCharges  int
-	SlowUntil      time.Time
-	DoubleCharges  int
+	Pickup           UpgradePickup
+	Shield           TimedCharge
+	Phase            TimedCharge
+	Warp             TimedCharge
+	SlowUntil        time.Time
+	DoubleCharges    int
+	DoubleUntil      time.Time
+	ComboKeeperUntil time.Time
+	TurboUntil       time.Time
+	Message          string
+	MessageUntil     time.Time
 
 	Completed       bool
 	SurvivalAwarded bool
@@ -129,6 +187,7 @@ func (q *QuestState) OnNormalFood(game *SnakeGame, heat HeatLevel, now time.Time
 	if !q.Enabled() || q.Completed {
 		return
 	}
+	q.expireEffects(now)
 	q.refreshCombo(now)
 	q.Combo++
 	q.ComboExpiresAt = now.Add(comboWindow)
@@ -137,15 +196,18 @@ func (q *QuestState) OnNormalFood(game *SnakeGame, heat HeatLevel, now time.Time
 	}
 	q.NormalFood++
 	score := q.scoreFor(baseFoodScore, heat)
-	if q.DoubleCharges > 0 {
+	if q.DoubleCharges > 0 && now.Before(q.DoubleUntil) {
 		score *= 2
 		q.DoubleCharges--
+		if q.DoubleCharges == 0 {
+			q.DoubleUntil = time.Time{}
+		}
 	}
 	q.BaseScore += score
 	game.Score = q.BaseScore
 	q.updateMission(heat, now, false)
-	if q.NormalFood%5 == 0 && len(q.PendingChoices) == 0 {
-		q.PendingChoices = PickUpgradeChoices(q.Rand)
+	if q.NormalFood%5 == 0 && !q.Pickup.Active {
+		q.spawnPickup(game, now)
 	}
 	q.maybeSpawnGolden(game, now)
 }
@@ -154,6 +216,7 @@ func (q *QuestState) OnGoldenByte(game *SnakeGame, heat HeatLevel, now time.Time
 	if !q.Enabled() || q.Completed || !q.Golden.Active {
 		return
 	}
+	q.expireEffects(now)
 	q.refreshCombo(now)
 	q.Combo++
 	q.ComboExpiresAt = now.Add(comboWindow)
@@ -162,14 +225,52 @@ func (q *QuestState) OnGoldenByte(game *SnakeGame, heat HeatLevel, now time.Time
 	}
 	q.GoldenCollected++
 	score := q.scoreFor(goldenByteBase, heat)
-	if q.DoubleCharges > 0 {
-		score *= 2
-		q.DoubleCharges--
-	}
 	q.BaseScore += score
 	game.Score = q.BaseScore
 	q.Golden.Active = false
 	q.updateMission(heat, now, false)
+}
+
+func (q *QuestState) OnPickupCollected(game *SnakeGame, heat HeatLevel, now time.Time) bool {
+	if !q.Enabled() || q.Completed || !q.Pickup.Active {
+		return false
+	}
+	pickup := q.Pickup
+	q.Pickup = UpgradePickup{}
+	switch pickup.Upgrade {
+	case UpgradeShield:
+		q.Shield = TimedCharge{Charges: 1, ExpiresAt: now.Add(shieldDuration)}
+		q.notice("PICKUP: SHIELD - NEXT COLLISION BLOCKED", now)
+	case UpgradePhase:
+		q.Phase = TimedCharge{Charges: 1, ExpiresAt: now.Add(phaseDuration)}
+		q.notice("PICKUP: PHASE - NEXT COLLISION PASSES THROUGH", now)
+	case UpgradeSlowClock:
+		q.SlowUntil = now.Add(slowClockDuration)
+		q.notice("PICKUP: SLOW CLOCK", now)
+	case UpgradeDoubleScore:
+		q.DoubleCharges += doubleScoreCharges
+		if q.DoubleCharges > doubleScoreCap {
+			q.DoubleCharges = doubleScoreCap
+		}
+		q.DoubleUntil = now.Add(doubleScoreDuration)
+		q.notice("PICKUP: DOUBLE SCORE", now)
+	case UpgradePatch:
+		removed := game.TrimTail(patchRemoveLimit, minimumSnakeLength)
+		q.notice(fmt.Sprintf("PICKUP: PATCH - LENGTH -%d", removed), now)
+	case UpgradeComboKeeper:
+		q.ComboKeeperUntil = now.Add(comboKeeperDuration)
+		q.notice("PICKUP: COMBO KEEPER", now)
+	case UpgradeTurbo:
+		q.TurboUntil = now.Add(turboDuration)
+		q.notice("PICKUP: TURBO", now)
+	case UpgradeWarp:
+		q.Warp = TimedCharge{Charges: 1, ExpiresAt: now.Add(warpDuration)}
+		q.notice("PICKUP: WARP - EMERGENCY TELEPORT READY", now)
+	default:
+		return false
+	}
+	q.updateMission(heat, now, false)
+	return true
 }
 
 func (q *QuestState) Tick(game *SnakeGame, heat HeatLevel, now time.Time) {
@@ -179,6 +280,7 @@ func (q *QuestState) Tick(game *SnakeGame, heat HeatLevel, now time.Time) {
 	if heat.Level > q.MaxHeat {
 		q.MaxHeat = heat.Level
 	}
+	q.expireEffects(now)
 	q.refreshCombo(now)
 	if q.Golden.Active && !now.Before(q.Golden.ExpiresAt) {
 		q.Golden.Active = false
@@ -192,47 +294,61 @@ func (q *QuestState) OnCrash() {
 	}
 	q.Combo = 0
 	q.ComboExpiresAt = time.Time{}
-	q.PendingChoices = nil
-	q.ShieldCharges = 0
-	q.SlowUntil = time.Time{}
-	q.DoubleCharges = 0
+	q.clearRoundEffects()
 	q.Golden.Active = false
 }
 
+func (q *QuestState) TryCollisionEffects(game *SnakeGame, result StepResult, now time.Time) StepResult {
+	if !q.Enabled() || (result != StepHitWall && result != StepHitSelf) {
+		return result
+	}
+	q.expireEffects(now)
+	if q.Phase.Charges > 0 && now.Before(q.Phase.ExpiresAt) && game.PhaseForward() {
+		q.Phase = TimedCharge{}
+		q.notice("PHASE USED", now)
+		return StepMoved
+	}
+	if q.Shield.Charges > 0 && now.Before(q.Shield.ExpiresAt) {
+		q.Shield = TimedCharge{}
+		game.Recover()
+		q.notice("SHIELD USED", now)
+		return StepMoved
+	}
+	if q.Warp.Charges > 0 && now.Before(q.Warp.ExpiresAt) && game.WarpToFreePoint(q.Rand, []Point{game.Food, q.Golden.Position, q.Pickup.Position}) {
+		q.Warp = TimedCharge{}
+		q.notice("WARP USED", now)
+		return StepMoved
+	}
+	return result
+}
+
 func (q *QuestState) TryShieldRecovery(game *SnakeGame) bool {
-	if !q.Enabled() || q.ShieldCharges <= 0 {
+	if !q.Enabled() || q.Shield.Charges <= 0 {
 		return false
 	}
-	q.ShieldCharges--
+	q.Shield = TimedCharge{}
 	game.Recover()
 	return true
 }
 
-func (q *QuestState) ApplyUpgrade(index int, now time.Time) bool {
-	if !q.Enabled() || index < 0 || index >= len(q.PendingChoices) {
-		return false
-	}
-	switch q.PendingChoices[index].Upgrade {
-	case UpgradeShield:
-		q.ShieldCharges++
-	case UpgradeSlowClock:
-		q.SlowUntil = now.Add(slowClockDuration)
-	case UpgradeDoubleByte:
-		q.DoubleCharges += 3
-	}
-	q.PendingChoices = nil
-	return true
-}
-
 func (q *QuestState) EffectiveInterval(base time.Duration, now time.Time) time.Duration {
-	if !q.Enabled() || q.SlowUntil.IsZero() || !now.Before(q.SlowUntil) {
+	if !q.Enabled() {
 		return base
 	}
-	slowed := base + 60*time.Millisecond
-	if slowed < normalMinimumSpeed {
-		return normalMinimumSpeed
+	interval := base
+	if !q.SlowUntil.IsZero() && now.Before(q.SlowUntil) {
+		interval += 60 * time.Millisecond
+		if interval < normalMinimumSpeed {
+			interval = normalMinimumSpeed
+		}
 	}
-	return slowed
+	if !q.TurboUntil.IsZero() && now.Before(q.TurboUntil) {
+		interval = interval * 85 / 100
+		if interval < turboMinimumSpeed {
+			interval = turboMinimumSpeed
+		}
+	}
+	return interval
 }
 
 func (q *QuestState) Complete(game *SnakeGame, heat HeatLevel, now time.Time) ScoreBreakdown {
@@ -245,6 +361,7 @@ func (q *QuestState) Complete(game *SnakeGame, heat HeatLevel, now time.Time) Sc
 	q.Completed = true
 	if q.Enabled() {
 		q.updateMission(heat, now, !game.Over)
+		q.clearRoundEffects()
 	}
 	final := ScoreBreakdown{BaseScore: game.Score}
 	if q.Enabled() {
@@ -277,22 +394,30 @@ func (q *QuestState) HUD() string {
 	if q.Mission.ID != "" {
 		parts = append(parts, fmt.Sprintf("QUEST: %s %d/%d", q.Mission.Label, q.MissionProgress, q.Mission.Target))
 	}
-	if q.ShieldCharges > 0 {
-		parts = append(parts, fmt.Sprintf("SHIELD %d", q.ShieldCharges))
-	}
-	if q.DoubleCharges > 0 {
-		parts = append(parts, fmt.Sprintf("DOUBLE BYTE %d", q.DoubleCharges))
-	}
+	parts = append(parts, q.effectHUDParts(time.Now())...)
 	return joinParts(parts)
 }
 
 func (q *QuestState) scoreFor(base int, heat HeatLevel) int {
 	score := heat.ScoreAward(base)
 	comboMultiplier := 1000 + (q.Combo-1)*250
+	if !q.TurboUntil.IsZero() {
+		score = score * turboScorePermille / 1000
+	}
 	return score * comboMultiplier / 1000
 }
 
 func (q *QuestState) refreshCombo(now time.Time) {
+	if q.Combo > 0 && !q.ComboKeeperUntil.IsZero() {
+		if now.Before(q.ComboKeeperUntil) {
+			return
+		}
+		q.ComboKeeperUntil = time.Time{}
+		if !now.Before(q.ComboExpiresAt) {
+			q.ComboExpiresAt = now.Add(comboWindow)
+			return
+		}
+	}
 	if q.Combo > 0 && !now.Before(q.ComboExpiresAt) {
 		q.Combo = 0
 		q.ComboExpiresAt = time.Time{}
@@ -303,11 +428,126 @@ func (q *QuestState) maybeSpawnGolden(game *SnakeGame, now time.Time) {
 	if q.Golden.Active || q.NormalFood == 0 || q.NormalFood%7 != 0 {
 		return
 	}
-	point, ok := freePoint(game, q.Rand, []Point{game.Food})
+	extraOccupied := []Point{game.Food}
+	if q.Pickup.Active {
+		extraOccupied = append(extraOccupied, q.Pickup.Position)
+	}
+	point, ok := freePoint(game, q.Rand, extraOccupied)
 	if !ok {
 		return
 	}
 	q.Golden = GoldenByte{Position: point, ExpiresAt: now.Add(goldenByteTTL), Active: true}
+}
+
+func (q *QuestState) spawnPickup(game *SnakeGame, now time.Time) bool {
+	upgrade, ok := selectPickup(q.Rand, availablePickups(game))
+	if !ok {
+		return false
+	}
+	extraOccupied := []Point{game.Food}
+	if q.Golden.Active {
+		extraOccupied = append(extraOccupied, q.Golden.Position)
+	}
+	point, ok := freePoint(game, q.Rand, extraOccupied)
+	if !ok {
+		return false
+	}
+	q.Pickup = UpgradePickup{Upgrade: upgrade, Position: point, ExpiresAt: now.Add(pickupTTL), Active: true}
+	return true
+}
+
+func (q *QuestState) ResizePickup(game *SnakeGame) {
+	if !q.Enabled() || !q.Pickup.Active {
+		return
+	}
+	point := q.Pickup.Position
+	if point.X < 0 || point.X >= game.Width || point.Y < 0 || point.Y >= game.Height || game.Occupies(point) || point == game.Food || (q.Golden.Active && point == q.Golden.Position) {
+		q.Pickup = UpgradePickup{}
+	}
+}
+
+func (q *QuestState) expireEffects(now time.Time) {
+	if q.Pickup.Active && !now.Before(q.Pickup.ExpiresAt) {
+		q.Pickup = UpgradePickup{}
+		q.notice("PICKUP EXPIRED", now)
+	}
+	if q.Golden.Active && !now.Before(q.Golden.ExpiresAt) {
+		q.Golden.Active = false
+	}
+	if q.Shield.Charges > 0 && !now.Before(q.Shield.ExpiresAt) {
+		q.Shield = TimedCharge{}
+		q.notice("SHIELD EXPIRED", now)
+	}
+	if q.Phase.Charges > 0 && !now.Before(q.Phase.ExpiresAt) {
+		q.Phase = TimedCharge{}
+		q.notice("PHASE EXPIRED", now)
+	}
+	if q.Warp.Charges > 0 && !now.Before(q.Warp.ExpiresAt) {
+		q.Warp = TimedCharge{}
+		q.notice("WARP EXPIRED", now)
+	}
+	if q.DoubleCharges > 0 && !now.Before(q.DoubleUntil) {
+		q.DoubleCharges = 0
+		q.DoubleUntil = time.Time{}
+		q.notice("DOUBLE EXPIRED", now)
+	}
+	if !q.SlowUntil.IsZero() && !now.Before(q.SlowUntil) {
+		q.SlowUntil = time.Time{}
+		q.notice("SLOW EXPIRED", now)
+	}
+	if !q.TurboUntil.IsZero() && !now.Before(q.TurboUntil) {
+		q.TurboUntil = time.Time{}
+		q.notice("TURBO EXPIRED", now)
+	}
+	if q.Message != "" && !now.Before(q.MessageUntil) {
+		q.Message = ""
+		q.MessageUntil = time.Time{}
+	}
+}
+
+func (q *QuestState) clearRoundEffects() {
+	q.Pickup = UpgradePickup{}
+	q.Shield = TimedCharge{}
+	q.Phase = TimedCharge{}
+	q.Warp = TimedCharge{}
+	q.SlowUntil = time.Time{}
+	q.DoubleCharges = 0
+	q.DoubleUntil = time.Time{}
+	q.ComboKeeperUntil = time.Time{}
+	q.TurboUntil = time.Time{}
+	q.Message = ""
+	q.MessageUntil = time.Time{}
+}
+
+func (q *QuestState) notice(message string, now time.Time) {
+	q.Message = message
+	q.MessageUntil = now.Add(2 * time.Second)
+}
+
+func (q *QuestState) effectHUDParts(now time.Time) []string {
+	parts := []string{}
+	if q.Shield.Charges > 0 && now.Before(q.Shield.ExpiresAt) {
+		parts = append(parts, fmt.Sprintf("SHIELD %d.%ds", q.Shield.Charges, secondsLeft(q.Shield.ExpiresAt, now)))
+	}
+	if q.Phase.Charges > 0 && now.Before(q.Phase.ExpiresAt) {
+		parts = append(parts, fmt.Sprintf("PHASE %d.%ds", q.Phase.Charges, secondsLeft(q.Phase.ExpiresAt, now)))
+	}
+	if q.Warp.Charges > 0 && now.Before(q.Warp.ExpiresAt) {
+		parts = append(parts, fmt.Sprintf("WARP %d.%ds", q.Warp.Charges, secondsLeft(q.Warp.ExpiresAt, now)))
+	}
+	if q.DoubleCharges > 0 && now.Before(q.DoubleUntil) {
+		parts = append(parts, fmt.Sprintf("DOUBLE %d.%ds", q.DoubleCharges, secondsLeft(q.DoubleUntil, now)))
+	}
+	if !q.SlowUntil.IsZero() && now.Before(q.SlowUntil) {
+		parts = append(parts, fmt.Sprintf("SLOW %ds", secondsLeft(q.SlowUntil, now)))
+	}
+	if !q.ComboKeeperUntil.IsZero() && now.Before(q.ComboKeeperUntil) {
+		parts = append(parts, fmt.Sprintf("COMBO LOCK %ds", secondsLeft(q.ComboKeeperUntil, now)))
+	}
+	if !q.TurboUntil.IsZero() && now.Before(q.TurboUntil) {
+		parts = append(parts, fmt.Sprintf("TURBO %ds", secondsLeft(q.TurboUntil, now)))
+	}
+	return parts
 }
 
 func (q *QuestState) updateMission(heat HeatLevel, now time.Time, alive bool) {
@@ -355,47 +595,80 @@ func selectMission(random RandomSource, boardWidth int, boardHeight int) Mission
 	return pool[randomIndex(random, len(pool))]
 }
 
-func PickUpgradeChoices(random RandomSource) []UpgradeChoice {
-	upgrades := []Upgrade{UpgradeShield, UpgradeSlowClock, UpgradeDoubleByte}
-	for index := range upgrades {
-		swap := index + randomIndex(random, len(upgrades)-index)
-		upgrades[index], upgrades[swap] = upgrades[swap], upgrades[index]
+func availablePickups(game *SnakeGame) []Upgrade {
+	upgrades := make([]Upgrade, 0, len(pickupPool))
+	for _, upgrade := range pickupPool {
+		if upgrade == UpgradePatch && len(game.Snake) <= minimumSnakeLength {
+			continue
+		}
+		upgrades = append(upgrades, upgrade)
 	}
-	choices := make([]UpgradeChoice, 0, 3)
-	for _, upgrade := range upgrades[:3] {
-		choices = append(choices, UpgradeChoice{Upgrade: upgrade, Label: string(upgrade)})
+	return upgrades
+}
+
+func selectPickup(random RandomSource, pool []Upgrade) (Upgrade, bool) {
+	if len(pool) == 0 {
+		return "", false
 	}
-	return choices
+	return pool[randomIndex(random, len(pool))], true
+}
+
+func PickupName(upgrade Upgrade) string {
+	if definition, ok := pickupDefinitions[upgrade]; ok {
+		return definition.Name
+	}
+	return string(upgrade)
+}
+
+func PickupSymbol(upgrade Upgrade) string {
+	if definition, ok := pickupDefinitions[upgrade]; ok {
+		return definition.Symbol
+	}
+	return "??"
+}
+
+func secondsLeft(deadline time.Time, now time.Time) int {
+	remaining := deadline.Sub(now)
+	if remaining <= 0 {
+		return 0
+	}
+	return int(remaining.Round(time.Second).Seconds())
 }
 
 func freePoint(game *SnakeGame, random RandomSource, extraOccupied []Point) (Point, bool) {
 	occupied := make(map[Point]bool, len(game.Snake)+len(extraOccupied))
-	for _, point := range game.Snake {
+	for index, point := range game.Snake {
+		if index == 0 {
+			continue
+		}
 		occupied[point] = true
 	}
 	for _, point := range extraOccupied {
-		if point.X >= 0 && point.Y >= 0 {
+		if point.X >= 0 && point.X < game.Width && point.Y >= 0 && point.Y < game.Height {
 			occupied[point] = true
 		}
 	}
-	available := make([]Point, 0, game.Width*game.Height-len(occupied))
-	for y := 0; y < game.Height; y++ {
-		for x := 0; x < game.Width; x++ {
-			point := Point{X: x, Y: y}
-			if !occupied[point] {
-				available = append(available, point)
-			}
+
+	distances := reachableDistances(game.Width, game.Height, game.Snake[0], occupied)
+	preferred := FoodRangeForHeat(game.FoodHeat)
+	available := make([]Point, 0, len(distances))
+	fallback := make([]Point, 0, len(distances))
+	for point, distance := range distances {
+		if point == game.Snake[0] || occupied[point] {
+			continue
 		}
+		fallback = append(fallback, point)
+		if distance >= preferred.Min && distance <= preferred.Max {
+			available = append(available, point)
+		}
+	}
+	if len(available) == 0 {
+		available = fallback
 	}
 	if len(available) == 0 {
 		return Point{}, false
 	}
-	sort.Slice(available, func(i, j int) bool {
-		if available[i].Y == available[j].Y {
-			return available[i].X < available[j].X
-		}
-		return available[i].Y < available[j].Y
-	})
+	sortPoints(available)
 	return available[randomIndex(random, len(available))], true
 }
 

@@ -122,44 +122,323 @@ func TestQuestMissionSelectionHonorsInjectedIndex(t *testing.T) {
 	}
 }
 
-func TestQuestUpgradeChoicesAndEffects(t *testing.T) {
+func TestQuestPickupSpawnsOnFifthNormalFood(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	game.Snake = []Point{{X: 4, Y: 4}, {X: 3, Y: 4}}
+	game.Food = Point{X: 0, Y: 0}
+	quest := NewQuestState(GameModeQuest, now, &sequenceRandom{values: []int{0, 0, 0}}, 8, 8)
+
+	for index := 0; index < 4; index++ {
+		quest.OnNormalFood(game, HeatByLevel(1), now.Add(time.Duration(index)*time.Second))
+		if quest.Pickup.Active {
+			t.Fatalf("pickup spawned after %d foods, want no pickup before fifth", index+1)
+		}
+	}
+	quest.OnNormalFood(game, HeatByLevel(1), now.Add(5*time.Second))
+	if !quest.Pickup.Active || quest.Pickup.Upgrade != UpgradeShield {
+		t.Fatalf("pickup = %#v, want active shield", quest.Pickup)
+	}
+}
+
+func TestQuestPickupSelectionCanSelectEachType(t *testing.T) {
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	game.Snake = []Point{{X: 4, Y: 4}, {X: 3, Y: 4}}
+
+	for index, upgrade := range pickupPool {
+		selected, ok := selectPickup(fixedRandom(index), availablePickups(game))
+		if !ok {
+			t.Fatalf("selectPickup(%d) returned false", index)
+		}
+		if selected != upgrade {
+			t.Fatalf("selectPickup(%d) = %q, want %q", index, selected, upgrade)
+		}
+	}
+}
+
+func TestQuestPickupSymbolsAreDistinctAndNamed(t *testing.T) {
+	seen := map[string]Upgrade{}
+	for _, upgrade := range pickupPool {
+		symbol := PickupSymbol(upgrade)
+		if len([]rune(symbol)) != 2 {
+			t.Fatalf("PickupSymbol(%q) = %q, want two runes", upgrade, symbol)
+		}
+		if previous, exists := seen[symbol]; exists {
+			t.Fatalf("symbol %q used by both %q and %q", symbol, previous, upgrade)
+		}
+		seen[symbol] = upgrade
+		if PickupName(upgrade) == "" || PickupName(upgrade) == "Double Byte" {
+			t.Fatalf("PickupName(%q) = %q", upgrade, PickupName(upgrade))
+		}
+	}
+	if PickupSymbol(UpgradeDoubleScore) == "<>" {
+		t.Fatal("Double Score symbol conflicts with Golden Byte")
+	}
+}
+
+func TestQuestFiltersUnavailablePatchPickup(t *testing.T) {
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	game.Snake = []Point{{X: 4, Y: 4}}
+
+	for _, upgrade := range availablePickups(game) {
+		if upgrade == UpgradePatch {
+			t.Fatal("Patch was available for minimum-length snake")
+		}
+	}
+}
+
+func TestQuestPickupPlacementExcludesOccupiedCells(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	game.Snake = []Point{{X: 4, Y: 4}, {X: 3, Y: 4}}
+	game.Food = Point{X: 2, Y: 2}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Golden = GoldenByte{Active: true, Position: Point{X: 5, Y: 5}, ExpiresAt: now.Add(time.Second)}
+
+	if !quest.spawnPickup(game, now) {
+		t.Fatal("spawnPickup returned false")
+	}
+	if quest.Pickup.Position == game.Food || quest.Pickup.Position == quest.Golden.Position {
+		t.Fatalf("pickup spawned on occupied point %#v", quest.Pickup.Position)
+	}
+	for _, point := range game.Snake {
+		if quest.Pickup.Position == point {
+			t.Fatalf("pickup spawned on snake at %#v", point)
+		}
+	}
+}
+
+func TestQuestPickupExpires(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+
+	quest.Tick(game, HeatByLevel(1), now.Add(pickupTTL))
+
+	if quest.Pickup.Active {
+		t.Fatal("pickup remained active after TTL")
+	}
+}
+
+func TestQuestPickupCollectionAppliesEffects(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(8, 8, func(int) int { return 0 })
 	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
 
-	choices := PickUpgradeChoices(fixedRandom(0))
-	if len(choices) != 3 || choices[0].Upgrade == choices[1].Upgrade || choices[1].Upgrade == choices[2].Upgrade || choices[0].Upgrade == choices[2].Upgrade {
-		t.Fatalf("choices are not unique: %#v", choices)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+	quest.OnPickupCollected(game, HeatByLevel(1), now)
+	if quest.Shield.Charges != 1 || !quest.Shield.ExpiresAt.Equal(now.Add(shieldDuration)) {
+		t.Fatalf("shield = %#v, want one timed charge", quest.Shield)
 	}
-	quest.PendingChoices = []UpgradeChoice{{Upgrade: UpgradeShield}}
-	if !quest.ApplyUpgrade(0, now) || quest.ShieldCharges != 1 {
-		t.Fatalf("shield upgrade not applied: %#v", quest)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeDoubleScore, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+	quest.OnPickupCollected(game, HeatByLevel(1), now)
+	if quest.DoubleCharges != doubleScoreCharges || !quest.DoubleUntil.Equal(now.Add(doubleScoreDuration)) {
+		t.Fatalf("double charges=%d until=%s", quest.DoubleCharges, quest.DoubleUntil)
 	}
-	game.Over = true
-	if !quest.TryShieldRecovery(game) || game.Over || quest.ShieldCharges != 0 {
-		t.Fatalf("shield recovery failed: over=%t charges=%d", game.Over, quest.ShieldCharges)
-	}
-	quest.PendingChoices = []UpgradeChoice{{Upgrade: UpgradeSlowClock}}
-	quest.ApplyUpgrade(0, now)
-	if got := quest.EffectiveInterval(85*time.Millisecond, now.Add(time.Second)); got < normalMinimumSpeed {
-		t.Fatalf("slow interval = %s, want at least %s", got, normalMinimumSpeed)
-	}
-	quest.PendingChoices = []UpgradeChoice{{Upgrade: UpgradeDoubleByte}}
-	quest.ApplyUpgrade(0, now)
-	quest.OnNormalFood(game, HeatByLevel(1), now)
-	if quest.DoubleCharges != 2 {
-		t.Fatalf("double charges = %d, want 2", quest.DoubleCharges)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradePatch, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+	game.Snake = []Point{{X: 4, Y: 4}, {X: 3, Y: 4}, {X: 2, Y: 4}, {X: 1, Y: 4}}
+	quest.OnPickupCollected(game, HeatByLevel(1), now)
+	if len(game.Snake) != 1 {
+		t.Fatalf("snake length after patch = %d, want 1", len(game.Snake))
 	}
 }
 
-func TestQuestUpgradeOrderingHonorsInjectedIndices(t *testing.T) {
-	choices := PickUpgradeChoices(&sequenceRandom{values: []int{2, 0, 0}})
+func TestQuestDoubleScoreCapTimeoutAndNormalFoodOnly(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.DoubleCharges = doubleScoreCap - 1
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeDoubleScore, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+	quest.OnPickupCollected(game, HeatByLevel(1), now)
+	if quest.DoubleCharges != doubleScoreCap {
+		t.Fatalf("DoubleCharges = %d, want cap %d", quest.DoubleCharges, doubleScoreCap)
+	}
 
-	want := []Upgrade{UpgradeDoubleByte, UpgradeSlowClock, UpgradeShield}
-	for index, upgrade := range want {
-		if choices[index].Upgrade != upgrade {
-			t.Fatalf("choices[%d] = %q, want %q; choices=%#v", index, choices[index].Upgrade, upgrade, choices)
-		}
+	quest.OnNormalFood(game, HeatByLevel(1), now.Add(time.Second))
+	if quest.DoubleCharges != doubleScoreCap-1 || game.Score != 20 {
+		t.Fatalf("after normal food charges=%d score=%d, want one doubled food", quest.DoubleCharges, game.Score)
+	}
+	quest.Golden = GoldenByte{Active: true}
+	quest.OnGoldenByte(game, HeatByLevel(1), now.Add(2*time.Second))
+	if quest.DoubleCharges != doubleScoreCap-1 {
+		t.Fatalf("Golden Byte consumed Double Score charge, charges=%d", quest.DoubleCharges)
+	}
+	quest.Tick(game, HeatByLevel(1), now.Add(doubleScoreDuration))
+	if quest.DoubleCharges != 0 {
+		t.Fatalf("DoubleCharges = %d after timeout, want 0", quest.DoubleCharges)
+	}
+}
+
+func TestQuestTimedEffectsRefreshAndExpire(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeSlowClock, ExpiresAt: now.Add(pickupTTL)}
+	quest.OnPickupCollected(game, HeatByLevel(1), now)
+	firstSlow := quest.SlowUntil
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeSlowClock, ExpiresAt: now.Add(pickupTTL)}
+	quest.OnPickupCollected(game, HeatByLevel(1), now.Add(time.Second))
+	if !quest.SlowUntil.After(firstSlow) {
+		t.Fatalf("SlowUntil did not refresh: first=%s second=%s", firstSlow, quest.SlowUntil)
+	}
+	if got := quest.EffectiveInterval(85*time.Millisecond, now.Add(2*time.Second)); got < normalMinimumSpeed {
+		t.Fatalf("slow interval = %s, want at least %s", got, normalMinimumSpeed)
+	}
+
+	turboQuest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	turboQuest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeTurbo, ExpiresAt: now.Add(pickupTTL)}
+	turboQuest.OnPickupCollected(game, HeatByLevel(1), now)
+	if got := turboQuest.EffectiveInterval(100*time.Millisecond, now.Add(time.Second)); got < turboMinimumSpeed || got >= 100*time.Millisecond {
+		t.Fatalf("turbo interval = %s, want faster but safe", got)
+	}
+	turboQuest.Tick(game, HeatByLevel(1), now.Add(turboDuration))
+	if !turboQuest.TurboUntil.IsZero() {
+		t.Fatal("turbo remained active after timeout")
+	}
+}
+
+func TestQuestComboKeeperFreezesComboExpiry(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Combo = 3
+	quest.ComboExpiresAt = now.Add(time.Second)
+	quest.ComboKeeperUntil = now.Add(comboKeeperDuration)
+
+	quest.Tick(game, HeatByLevel(1), now.Add(5*time.Second))
+	if quest.Combo != 3 {
+		t.Fatalf("combo = %d, want preserved by keeper", quest.Combo)
+	}
+	quest.Tick(game, HeatByLevel(1), now.Add(comboKeeperDuration))
+	if quest.Combo != 3 || !quest.ComboExpiresAt.After(now.Add(comboKeeperDuration)) {
+		t.Fatalf("combo=%d expires=%s, want restarted combo window", quest.Combo, quest.ComboExpiresAt)
+	}
+}
+
+func TestQuestCollisionEffectsUsePriority(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(6, 6, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 2}, {X: 3, Y: 2}, {X: 1, Y: 2}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 6, 6)
+	quest.Phase = TimedCharge{Charges: 1, ExpiresAt: now.Add(phaseDuration)}
+	quest.Shield = TimedCharge{Charges: 1, ExpiresAt: now.Add(shieldDuration)}
+	quest.Warp = TimedCharge{Charges: 1, ExpiresAt: now.Add(warpDuration)}
+
+	result := game.Step()
+	if result != StepHitSelf {
+		t.Fatalf("Step result = %v, want self collision", result)
+	}
+	result = quest.TryCollisionEffects(game, result, now)
+	if result != StepMoved || game.Over || game.Snake[0] != (Point{X: 4, Y: 2}) {
+		t.Fatalf("phase result=%v over=%t head=%#v", result, game.Over, game.Snake[0])
+	}
+	if quest.Phase.Charges != 0 || quest.Shield.Charges != 1 || quest.Warp.Charges != 1 {
+		t.Fatalf("charges after priority phase: phase=%#v shield=%#v warp=%#v", quest.Phase, quest.Shield, quest.Warp)
+	}
+}
+
+func TestQuestPhaseUnsafeFallbackKeepsCollision(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(1, 1, func(int) int { return 0 })
+	game.Snake = []Point{{X: 0, Y: 0}}
+	game.Dir = DirectionRight
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 1, 1)
+	quest.Phase = TimedCharge{Charges: 1, ExpiresAt: now.Add(phaseDuration)}
+
+	result := game.Step()
+	result = quest.TryCollisionEffects(game, result, now)
+
+	if result != StepHitWall || !game.Over || quest.Phase.Charges != 1 {
+		t.Fatalf("phase fallback result=%v over=%t charges=%d", result, game.Over, quest.Phase.Charges)
+	}
+}
+
+func TestQuestWarpUsesSafeDestinationAndFallback(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(4, 4, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 1}, {X: 2, Y: 1}}
+	game.Dir = DirectionRight
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 4, 4)
+	quest.Warp = TimedCharge{Charges: 1, ExpiresAt: now.Add(warpDuration)}
+
+	result := game.Step()
+	result = quest.TryCollisionEffects(game, result, now)
+	if result != StepMoved || game.Over || quest.Warp.Charges != 0 {
+		t.Fatalf("warp failed: result=%v over=%t charges=%d", result, game.Over, quest.Warp.Charges)
+	}
+	if game.Snake[0].X < 0 || game.Snake[0].X >= game.Width || game.Snake[0].Y < 0 || game.Snake[0].Y >= game.Height {
+		t.Fatalf("warp head out of bounds: %#v", game.Snake[0])
+	}
+
+	full := NewSnakeGame(1, 1, func(int) int { return 0 })
+	full.Snake = []Point{{X: 0, Y: 0}}
+	full.Dir = DirectionRight
+	quest.Warp = TimedCharge{Charges: 1, ExpiresAt: now.Add(warpDuration)}
+	result = full.Step()
+	result = quest.TryCollisionEffects(full, result, now)
+	if result != StepHitWall || !full.Over || quest.Warp.Charges != 1 {
+		t.Fatalf("warp fallback result=%v over=%t charges=%d", result, full.Over, quest.Warp.Charges)
+	}
+}
+
+func TestQuestCrashAndCompletionClearRoundEffects(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeWarp, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+	quest.Shield = TimedCharge{Charges: 1, ExpiresAt: now.Add(shieldDuration)}
+	quest.Phase = TimedCharge{Charges: 1, ExpiresAt: now.Add(phaseDuration)}
+	quest.Warp = TimedCharge{Charges: 1, ExpiresAt: now.Add(warpDuration)}
+	quest.SlowUntil = now.Add(slowClockDuration)
+	quest.DoubleCharges = 2
+	quest.DoubleUntil = now.Add(doubleScoreDuration)
+	quest.ComboKeeperUntil = now.Add(comboKeeperDuration)
+	quest.TurboUntil = now.Add(turboDuration)
+
+	quest.OnCrash()
+	if quest.Pickup.Active || quest.Shield.Charges != 0 || quest.Phase.Charges != 0 || quest.Warp.Charges != 0 || quest.DoubleCharges != 0 || !quest.SlowUntil.IsZero() || !quest.ComboKeeperUntil.IsZero() || !quest.TurboUntil.IsZero() {
+		t.Fatalf("effects not cleared after crash: %#v", quest)
+	}
+
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+	quest.Shield = TimedCharge{Charges: 1, ExpiresAt: now.Add(shieldDuration)}
+	quest.Complete(game, HeatByLevel(1), now)
+	if quest.Pickup.Active || quest.Shield.Charges != 0 {
+		t.Fatalf("effects not cleared after completion: pickup=%#v shield=%#v", quest.Pickup, quest.Shield)
+	}
+}
+
+func TestQuestResizePickupClearsInvalidPosition(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 7, Y: 7}, ExpiresAt: now.Add(pickupTTL)}
+
+	game.Resize(2, 2)
+	quest.ResizePickup(game)
+
+	if quest.Pickup.Active {
+		t.Fatalf("pickup remained active after resize outside board: %#v", quest.Pickup)
+	}
+}
+
+func TestStepGameCollectsPickupWithoutBlockingMovement(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(8, 8, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 3}, {X: 2, Y: 3}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 4, Y: 3}, ExpiresAt: now.Add(pickupTTL)}
+
+	result := stepGame(game, quest, HeatByLevel(1), now)
+
+	if result != StepMoved || game.Snake[0] != (Point{X: 4, Y: 3}) || quest.Pickup.Active || quest.Shield.Charges != 1 {
+		t.Fatalf("pickup collection result=%v head=%#v pickup=%#v shield=%#v", result, game.Snake[0], quest.Pickup, quest.Shield)
 	}
 }
 
