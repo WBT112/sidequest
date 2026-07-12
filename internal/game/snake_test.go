@@ -116,27 +116,97 @@ func TestSnakeMayMoveIntoVacatedTail(t *testing.T) {
 	}
 }
 
-func TestSnakeResizeRestartsBoardSafely(t *testing.T) {
-	game := NewSnakeGame(5, 5, func(int) int { return 0 })
-	game.Snake = []Point{{X: 4, Y: 4}, {X: 3, Y: 4}}
+func TestSnakeResizePreservesStateWhenCoordinatesRemainValid(t *testing.T) {
+	game := NewSnakeGame(6, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 2}, {X: 2, Y: 2}, {X: 1, Y: 2}}
+	game.Food = Point{X: 4, Y: 2}
+	game.Dir = DirectionRight
+	game.PendingDirs = []Direction{DirectionUp}
 	game.Score = 3
-	game.Over = true
+	game.FoodScore = 5
+	game.FoodHeat = 4
 
-	game.Resize(2, 2)
+	result := game.Resize(8, 6)
 
-	if game.Width != 2 || game.Height != 2 {
-		t.Fatalf("board = %dx%d, want 2x2", game.Width, game.Height)
+	if result != ResizeUnchanged {
+		t.Fatalf("Resize result = %v, want %v", result, ResizeUnchanged)
 	}
-	if game.Score != 0 {
-		t.Fatalf("Score = %d, want reset score 0", game.Score)
+	if game.Width != 8 || game.Height != 6 {
+		t.Fatalf("board = %dx%d, want 8x6", game.Width, game.Height)
 	}
-	if game.Over {
-		t.Fatal("game.Over = true, want false")
+	assertSnake(t, game.Snake, []Point{{X: 3, Y: 2}, {X: 2, Y: 2}, {X: 1, Y: 2}})
+	if game.Food != (Point{X: 4, Y: 2}) {
+		t.Fatalf("Food = %#v, want preserved", game.Food)
 	}
-	for _, point := range game.Snake {
-		if point.X < 0 || point.X >= game.Width || point.Y < 0 || point.Y >= game.Height {
-			t.Fatalf("snake point out of resized board: %#v", point)
-		}
+	if game.Score != 3 || game.FoodScore != 5 || game.FoodHeat != 4 {
+		t.Fatalf("score state = score %d foodScore %d foodHeat %d, want preserved", game.Score, game.FoodScore, game.FoodHeat)
+	}
+	if len(game.PendingDirs) != 0 {
+		t.Fatalf("PendingDirs = %v, want cleared", game.PendingDirs)
+	}
+}
+
+func TestSnakeResizeTranslatesShapeIntoBounds(t *testing.T) {
+	game := NewSnakeGame(5, 4, func(int) int { return 0 })
+	game.Snake = []Point{{X: 4, Y: 2}, {X: 3, Y: 2}, {X: 2, Y: 2}}
+	game.Food = Point{X: 0, Y: 0}
+	game.Score = 7
+
+	result := game.Resize(4, 4)
+
+	if result != ResizeTranslated {
+		t.Fatalf("Resize result = %v, want %v", result, ResizeTranslated)
+	}
+	assertSnake(t, game.Snake, []Point{{X: 3, Y: 2}, {X: 2, Y: 2}, {X: 1, Y: 2}})
+	if game.Score != 7 {
+		t.Fatalf("Score = %d, want preserved", game.Score)
+	}
+	assertSnakeValid(t, game.Snake, game.Width, game.Height)
+}
+
+func TestSnakeResizeReflowsWhenShapeCannotFit(t *testing.T) {
+	game := NewSnakeGame(3, 6, func(int) int { return 0 })
+	game.Snake = []Point{{X: 1, Y: 5}, {X: 1, Y: 4}, {X: 1, Y: 3}, {X: 1, Y: 2}, {X: 1, Y: 1}}
+	game.Food = Point{X: 2, Y: 5}
+	game.Dir = DirectionUp
+	game.PendingDirs = []Direction{DirectionLeft}
+	game.Score = 11
+
+	result := game.Resize(5, 3)
+
+	if result != ResizeReflowed {
+		t.Fatalf("Resize result = %v, want %v", result, ResizeReflowed)
+	}
+	if len(game.Snake) != 5 {
+		t.Fatalf("snake length = %d, want 5", len(game.Snake))
+	}
+	if game.Score != 11 {
+		t.Fatalf("Score = %d, want preserved", game.Score)
+	}
+	if len(game.PendingDirs) != 0 {
+		t.Fatalf("PendingDirs = %v, want cleared", game.PendingDirs)
+	}
+	assertSnakeValid(t, game.Snake, game.Width, game.Height)
+}
+
+func TestSnakeResizeTooSmallLeavesStateUntouched(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 4, Y: 4}, {X: 3, Y: 4}, {X: 2, Y: 4}, {X: 1, Y: 4}, {X: 0, Y: 4}}
+	game.Food = Point{X: 0, Y: 0}
+	game.Score = 3
+	originalSnake := append([]Point(nil), game.Snake...)
+
+	result := game.Resize(2, 2)
+
+	if result != ResizeTooSmall {
+		t.Fatalf("Resize result = %v, want %v", result, ResizeTooSmall)
+	}
+	if game.Width != 5 || game.Height != 5 {
+		t.Fatalf("board = %dx%d, want unchanged 5x5", game.Width, game.Height)
+	}
+	assertSnake(t, game.Snake, originalSnake)
+	if game.Score != 3 {
+		t.Fatalf("Score = %d, want preserved", game.Score)
 	}
 }
 
@@ -330,6 +400,47 @@ func TestSnakeLifecycleClearsPendingDirections(t *testing.T) {
 	if len(newGame.PendingDirs) != 0 {
 		t.Fatalf("new game PendingDirs = %v, want empty", newGame.PendingDirs)
 	}
+}
+
+func assertSnake(t *testing.T, got []Point, want []Point) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("snake length = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			t.Fatalf("snake[%d] = %#v, want %#v; full snake %#v", index, got[index], want[index], got)
+		}
+	}
+}
+
+func assertSnakeValid(t *testing.T, snake []Point, width int, height int) {
+	t.Helper()
+	seen := make(map[Point]bool, len(snake))
+	for index, point := range snake {
+		if point.X < 0 || point.X >= width || point.Y < 0 || point.Y >= height {
+			t.Fatalf("snake[%d] out of bounds for %dx%d: %#v", index, width, height, point)
+		}
+		if seen[point] {
+			t.Fatalf("snake[%d] duplicates point %#v in %#v", index, point, snake)
+		}
+		seen[point] = true
+		if index == 0 {
+			continue
+		}
+		previous := snake[index-1]
+		distance := abs(previous.X-point.X) + abs(previous.Y-point.Y)
+		if distance != 1 {
+			t.Fatalf("snake[%d] = %#v is not adjacent to previous %#v in %#v", index, point, previous, snake)
+		}
+	}
+}
+
+func abs(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func TestDirectionKeysMapToSameDirections(t *testing.T) {

@@ -17,6 +17,7 @@ const (
 )
 
 type StepResult int
+type ResizeResult int
 
 const (
 	directionQueueCapacity = 2
@@ -27,6 +28,13 @@ const (
 	StepAteFood
 	StepHitWall
 	StepHitSelf
+)
+
+const (
+	ResizeUnchanged ResizeResult = iota
+	ResizeTranslated
+	ResizeReflowed
+	ResizeTooSmall
 )
 
 type SnakeGame struct {
@@ -69,9 +77,52 @@ func NewSnakeGame(width int, height int, randomInt func(int) int) *SnakeGame {
 	return game
 }
 
-func (g *SnakeGame) Resize(width int, height int) {
-	randomInt := g.randomInt
-	*g = *NewSnakeGame(width, height, randomInt)
+func (g *SnakeGame) Resize(width int, height int) ResizeResult {
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	if len(g.Snake) == 0 {
+		g.Width = width
+		g.Height = height
+		g.Snake = []Point{{X: width / 2, Y: height / 2}}
+		g.Dir = DirectionRight
+		g.PendingDirs = nil
+		g.placeFoodAfterResize()
+		return ResizeReflowed
+	}
+	if width*height < len(g.Snake) {
+		g.PendingDirs = nil
+		return ResizeTooSmall
+	}
+
+	result := ResizeUnchanged
+	nextSnake := append([]Point(nil), g.Snake...)
+	if !snakeWithinBounds(nextSnake, width, height) {
+		var ok bool
+		nextSnake, ok = translatedSnake(nextSnake, width, height)
+		result = ResizeTranslated
+		if !ok {
+			nextSnake, ok = reflowedSnake(g.Snake[0], len(g.Snake), width, height)
+			result = ResizeReflowed
+		}
+		if !ok {
+			g.PendingDirs = nil
+			return ResizeTooSmall
+		}
+	}
+
+	g.Width = width
+	g.Height = height
+	g.Snake = nextSnake
+	g.PendingDirs = nil
+	if result != ResizeUnchanged {
+		g.Dir = safeDirection(g.Dir, g.Snake, width, height)
+	}
+	g.placeFoodAfterResize()
+	return result
 }
 
 func (g *SnakeGame) Recover() {
@@ -176,6 +227,13 @@ func (g *SnakeGame) Occupies(point Point) bool {
 	return false
 }
 
+func (g *SnakeGame) placeFoodAfterResize() {
+	if g.Food.X >= 0 && g.Food.X < g.Width && g.Food.Y >= 0 && g.Food.Y < g.Height && !g.Occupies(g.Food) {
+		return
+	}
+	g.PlaceFood()
+}
+
 func (g *SnakeGame) TrimTail(limit int, minimumLength int) int {
 	if limit <= 0 || len(g.Snake) <= minimumLength {
 		return 0
@@ -260,6 +318,213 @@ func directionDelta(direction Direction) Point {
 	default:
 		return Point{X: 1}
 	}
+}
+
+func snakeWithinBounds(snake []Point, width int, height int) bool {
+	seen := make(map[Point]bool, len(snake))
+	for _, point := range snake {
+		if point.X < 0 || point.X >= width || point.Y < 0 || point.Y >= height {
+			return false
+		}
+		if seen[point] {
+			return false
+		}
+		seen[point] = true
+	}
+	return true
+}
+
+func translatedSnake(snake []Point, width int, height int) ([]Point, bool) {
+	minX, maxX := snake[0].X, snake[0].X
+	minY, maxY := snake[0].Y, snake[0].Y
+	for _, point := range snake[1:] {
+		if point.X < minX {
+			minX = point.X
+		}
+		if point.X > maxX {
+			maxX = point.X
+		}
+		if point.Y < minY {
+			minY = point.Y
+		}
+		if point.Y > maxY {
+			maxY = point.Y
+		}
+	}
+	if maxX-minX+1 > width || maxY-minY+1 > height {
+		return nil, false
+	}
+
+	dx := 0
+	if minX < 0 {
+		dx = -minX
+	} else if maxX >= width {
+		dx = width - 1 - maxX
+	}
+	dy := 0
+	if minY < 0 {
+		dy = -minY
+	} else if maxY >= height {
+		dy = height - 1 - maxY
+	}
+
+	resized := make([]Point, len(snake))
+	seen := make(map[Point]bool, len(snake))
+	for index, point := range snake {
+		next := Point{X: point.X + dx, Y: point.Y + dy}
+		if next.X < 0 || next.X >= width || next.Y < 0 || next.Y >= height || seen[next] {
+			return nil, false
+		}
+		resized[index] = next
+		seen[next] = true
+	}
+	return resized, true
+}
+
+func reflowedSnake(preferredHead Point, length int, width int, height int) ([]Point, bool) {
+	if length <= 0 || width*height < length {
+		return nil, false
+	}
+	head := clampPoint(preferredHead, width, height)
+	for _, path := range serpentinePaths(width, height) {
+		if snake, ok := slicePathFromHead(path, head, length); ok {
+			return snake, true
+		}
+	}
+	for _, path := range serpentinePaths(width, height) {
+		if len(path) >= length {
+			return append([]Point(nil), path[:length]...), true
+		}
+	}
+	return nil, false
+}
+
+func serpentinePaths(width int, height int) [][]Point {
+	paths := [][]Point{
+		rowSerpentinePath(width, height, false),
+		rowSerpentinePath(width, height, true),
+		columnSerpentinePath(width, height, false),
+		columnSerpentinePath(width, height, true),
+	}
+	for _, path := range append([][]Point(nil), paths...) {
+		paths = append(paths, reversedPath(path))
+	}
+	return paths
+}
+
+func rowSerpentinePath(width int, height int, reverseRows bool) []Point {
+	path := make([]Point, 0, width*height)
+	for y := 0; y < height; y++ {
+		leftToRight := y%2 == 0
+		if reverseRows {
+			leftToRight = !leftToRight
+		}
+		if leftToRight {
+			for x := 0; x < width; x++ {
+				path = append(path, Point{X: x, Y: y})
+			}
+			continue
+		}
+		for x := width - 1; x >= 0; x-- {
+			path = append(path, Point{X: x, Y: y})
+		}
+	}
+	return path
+}
+
+func columnSerpentinePath(width int, height int, reverseColumns bool) []Point {
+	path := make([]Point, 0, width*height)
+	for x := 0; x < width; x++ {
+		topToBottom := x%2 == 0
+		if reverseColumns {
+			topToBottom = !topToBottom
+		}
+		if topToBottom {
+			for y := 0; y < height; y++ {
+				path = append(path, Point{X: x, Y: y})
+			}
+			continue
+		}
+		for y := height - 1; y >= 0; y-- {
+			path = append(path, Point{X: x, Y: y})
+		}
+	}
+	return path
+}
+
+func reversedPath(path []Point) []Point {
+	reversed := make([]Point, len(path))
+	for index := range path {
+		reversed[index] = path[len(path)-1-index]
+	}
+	return reversed
+}
+
+func slicePathFromHead(path []Point, head Point, length int) ([]Point, bool) {
+	for index, point := range path {
+		if point != head {
+			continue
+		}
+		if index+length <= len(path) {
+			return append([]Point(nil), path[index:index+length]...), true
+		}
+		if index-length+1 >= 0 {
+			snake := make([]Point, 0, length)
+			for cursor := index; cursor > index-length; cursor-- {
+				snake = append(snake, path[cursor])
+			}
+			return snake, true
+		}
+	}
+	return nil, false
+}
+
+func clampPoint(point Point, width int, height int) Point {
+	if point.X < 0 {
+		point.X = 0
+	}
+	if point.X >= width {
+		point.X = width - 1
+	}
+	if point.Y < 0 {
+		point.Y = 0
+	}
+	if point.Y >= height {
+		point.Y = height - 1
+	}
+	return point
+}
+
+func safeDirection(preferred Direction, snake []Point, width int, height int) Direction {
+	for _, direction := range append([]Direction{preferred}, remainingDirections(preferred)...) {
+		next := Point{X: snake[0].X + directionDelta(direction).X, Y: snake[0].Y + directionDelta(direction).Y}
+		if next.X < 0 || next.X >= width || next.Y < 0 || next.Y >= height {
+			continue
+		}
+		collides := false
+		limit := len(snake) - 1
+		for index := 0; index < limit; index++ {
+			if snake[index] == next {
+				collides = true
+				break
+			}
+		}
+		if !collides {
+			return direction
+		}
+	}
+	return preferred
+}
+
+func remainingDirections(preferred Direction) []Direction {
+	directions := []Direction{DirectionUp, DirectionRight, DirectionDown, DirectionLeft}
+	remaining := directions[:0]
+	for _, direction := range directions {
+		if direction != preferred {
+			remaining = append(remaining, direction)
+		}
+	}
+	return remaining
 }
 
 func oppositeDirections(a Direction, b Direction) bool {

@@ -22,10 +22,11 @@ type FocusReader func() (bool, error)
 type PauseState struct {
 	Manual bool
 	Focus  bool
+	Resize bool
 }
 
 func (p PauseState) Active() bool {
-	return p.Manual || p.Focus
+	return p.Manual || p.Focus || p.Resize
 }
 
 type PlayClock struct {
@@ -239,7 +240,7 @@ func (s Shell) Run(ctx context.Context) error {
 					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 					render(screen, view)
 				default:
-					if direction, ok := directionFromKey(typed); ok && !view.Frozen && !game.Over && !view.Pause.Focus {
+					if direction, ok := directionFromKey(typed); ok && !view.Frozen && !game.Over && !view.Pause.Active() {
 						now := s.now()
 						firstMove := !view.Started
 						view.Started = true
@@ -254,9 +255,23 @@ func (s Shell) Run(ctx context.Context) error {
 				}
 			case *tcell.EventResize:
 				screen.Sync()
-				if !view.Frozen {
-					game.Resize(boardSize(screen))
-					view.Quest.ResizePickup(game)
+				now := s.now()
+				wasPaused := view.Pause.Active()
+				result := game.Resize(boardSize(screen))
+				if result == ResizeTooSmall {
+					view.Pause.Resize = true
+					view.Clock.Stop(now)
+					updateViewGameTime(&view, now)
+					updateViewHeat(&view, now)
+				} else {
+					view.Pause.Resize = false
+					view.Quest.ResizeObjects(game)
+					updateViewGameTime(&view, now)
+					updateViewHeat(&view, now)
+					if wasPaused && !view.Pause.Active() {
+						view.Clock.Start(now)
+					}
+					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 				}
 				render(screen, view)
 			}
@@ -670,6 +685,7 @@ func render(screen tcell.Screen, view viewState) {
 	drawGoldenByte(screen, view.Quest, style)
 	drawPickup(screen, view.Quest, style)
 	drawResultPanel(screen, view, style)
+	drawResizePausePanel(screen, view, style)
 
 	for _, line := range lines {
 		if line.centered {
@@ -887,6 +903,37 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 	}
 }
 
+func drawResizePausePanel(screen tcell.Screen, view viewState, baseStyle tcell.Style) {
+	if !view.Pause.Resize {
+		return
+	}
+
+	arena := arenaForScreen(screen)
+	if arena.RenderWidth() < 16 || arena.Height < 4 {
+		return
+	}
+
+	lines := []string{"Terminal too small", "Resize to continue"}
+	if arena.RenderWidth() >= 36 {
+		lines[0] = "Terminal too small for current Snake"
+	}
+	panelWidth := maxTextWidth(lines) + 4
+	if panelWidth > arena.RenderWidth() {
+		panelWidth = arena.RenderWidth()
+	}
+	panelHeight := len(lines) + 2
+	panelX := arena.X + (arena.RenderWidth()-panelWidth)/2
+	panelY := arena.Y + (arena.Height-panelHeight)/2
+
+	panelStyle := baseStyle.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
+	borderStyle := baseStyle.Foreground(tcell.ColorYellow).Background(tcell.ColorBlack).Bold(true)
+	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
+	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
+	for index, line := range lines {
+		drawCenteredText(screen, panelX+1, panelY+1+index, panelWidth-2, line, panelStyle)
+	}
+}
+
 func resultPanelLines(view viewState, maxWidth int) []string {
 	score := view.ResultScore
 	if score == 0 && view.PendingScore == nil && !view.RoundFinalized {
@@ -1088,6 +1135,8 @@ func activeMoveInterval(view viewState, override time.Duration, now time.Time) t
 
 func pauseLine(pause PauseState) string {
 	switch {
+	case pause.Resize:
+		return "PAUSED - TERMINAL TOO SMALL"
 	case pause.Manual && pause.Focus:
 		return "PAUSED - MANUAL + COMMAND FOCUS"
 	case pause.Focus:

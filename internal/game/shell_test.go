@@ -796,6 +796,7 @@ func TestPauseStateActive(t *testing.T) {
 		{pause: PauseState{}, want: false},
 		{pause: PauseState{Manual: true}, want: true},
 		{pause: PauseState{Focus: true}, want: true},
+		{pause: PauseState{Resize: true}, want: true},
 		{pause: PauseState{Manual: true, Focus: true}, want: true},
 	}
 	for _, test := range tests {
@@ -837,6 +838,26 @@ func TestUpdateViewHeatUsesActivePlayClock(t *testing.T) {
 
 	if view.Heat.Level != 3 {
 		t.Fatalf("Heat level = %d, want active-play level 3", view.Heat.Level)
+	}
+}
+
+func TestResizePauseStopsPlayClock(t *testing.T) {
+	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	view := viewState{
+		Started:      true,
+		Pause:        PauseState{Resize: true},
+		Game:         NewSnakeGame(5, 5, nil),
+		SessionState: session.StatusRunning,
+		Clock:        PlayClock{Accumulated: 10 * time.Second, ActiveSince: now.Add(-5 * time.Second), Running: true},
+	}
+
+	started, stopped := (Shell{}).syncPlayClock(&view, now)
+
+	if started || !stopped || view.Clock.Running {
+		t.Fatalf("syncPlayClock while resize-paused started=%t stopped=%t running=%t, want stopped", started, stopped, view.Clock.Running)
+	}
+	if got := view.Clock.Elapsed(now.Add(time.Hour)); got != 15*time.Second {
+		t.Fatalf("elapsed while resize-paused = %s, want 15s", got)
 	}
 }
 
