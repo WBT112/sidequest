@@ -1,0 +1,74 @@
+name: Verify public v0.1.0 installation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/verify-v0.1.0.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-public-v0.1.0
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify GitHub Release and curl installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Wait for published release and verify assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_url="https://api.github.com/repos/WBT112/sidequest/releases/latest"
+          release_json="$RUNNER_TEMP/release.json"
+          found=false
+          for attempt in $(seq 1 30); do
+            if curl -fsSL "$api_url" -o "$release_json" && jq -e '.tag_name == "v0.1.0" and .draft == false' "$release_json" >/dev/null; then
+              found=true
+              break
+            fi
+            sleep 10
+          done
+          test "$found" = true
+          for asset in \
+            sidequest_0.1.0_linux_amd64.tar.gz \
+            sidequest_0.1.0_linux_arm64.tar.gz \
+            sidequest_0.1.0_linux_amd64.deb \
+            sidequest_0.1.0_linux_arm64.deb \
+            sidequest_0.1.0_linux_amd64.rpm \
+            sidequest_0.1.0_linux_arm64.rpm \
+            checksums.txt
+          do
+            jq -e --arg asset "$asset" '.assets[] | select(.name == $asset)' "$release_json" >/dev/null
+          done
+
+      - name: Install through the public curl path
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/sidequest-bin"
+          curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh -o "$RUNNER_TEMP/install.sh"
+          SIDEQUEST_INSTALL_DIR="$install_dir" sh "$RUNNER_TEMP/install.sh"
+          "$install_dir/sidequest" --version | grep 'sidequest 0.1.0'
+          "$install_dir/sidequest" --help >/dev/null
+          test -x "$install_dir/sidequest"
+
+      - name: Record successful verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'v0.1.0 public release and curl installation verified\n' > .release-v0.1.0-verified
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .release-v0.1.0-verified
+          git commit -m "Record v0.1.0 release verification"
+          git push origin HEAD:main
