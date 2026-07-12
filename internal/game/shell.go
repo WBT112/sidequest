@@ -360,17 +360,27 @@ func freezeView(view *viewState, now time.Time, statsManager StatsManager) {
 		return
 	}
 	view.Frozen = true
-	if view.Started && view.Game != nil && !view.Game.Over {
+	if shouldFinalizeTerminalRound(view) {
 		finalizeRound(view, statsManagerOrDefault(statsManager))
 	} else if !view.RoundFinalized {
 		refreshLeaderboard(view, statsManagerOrDefault(statsManager))
 	}
-	if view.Quest.Enabled() {
+	if view.Quest.Enabled() && view.RoundFinalized {
 		manager := statsManagerOrDefault(statsManager)
 		if _, err := manager.UpdateQuest(view.FinalScore, view.Quest); err != nil {
 			view.StatsMessage = "Stats not saved: " + err.Error()
 		}
 	}
+}
+
+func shouldFinalizeTerminalRound(view *viewState) bool {
+	if !view.Started || view.Game == nil || view.Game.Over {
+		return false
+	}
+	if view.SessionState == session.StatusCompleted {
+		return true
+	}
+	return currentRoundScore(view) > 0
 }
 
 func (s Shell) statsManager() StatsManager {
@@ -429,6 +439,13 @@ func finalScore(view *viewState) int {
 		return view.FinalScore.FinalScore
 	}
 	if view.Game == nil {
+		return 0
+	}
+	return view.Game.Score
+}
+
+func currentRoundScore(view *viewState) int {
+	if view == nil || view.Game == nil {
 		return 0
 	}
 	return view.Game.Score
