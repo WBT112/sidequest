@@ -3,6 +3,7 @@ package game
 import (
 	"encoding/json"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,6 +77,123 @@ func TestStatsRejectsSymlinkFile(t *testing.T) {
 
 	if _, err := manager.UpdateQuest(ScoreBreakdown{FinalScore: 10}, quest); err == nil {
 		t.Fatal("UpdateQuest accepted symlink stats file")
+	}
+}
+
+func TestDefaultPlayerNameUsesLocalUserAndHostname(t *testing.T) {
+	manager := StatsManager{
+		CurrentUser: func() (*user.User, error) {
+			return &user.User{Username: "admin"}, nil
+		},
+		Hostname: func() (string, error) {
+			return "workstation", nil
+		},
+	}
+
+	if got := manager.DefaultPlayerName(); got != "admin@workstation" {
+		t.Fatalf("DefaultPlayerName = %q, want admin@workstation", got)
+	}
+}
+
+func TestDefaultPlayerNameFallsBackWithoutHostname(t *testing.T) {
+	manager := StatsManager{
+		CurrentUser: func() (*user.User, error) {
+			return &user.User{Username: "alex"}, nil
+		},
+		Hostname: func() (string, error) {
+			return "", os.ErrInvalid
+		},
+	}
+
+	if got := manager.DefaultPlayerName(); got != "alex" {
+		t.Fatalf("DefaultPlayerName = %q, want alex", got)
+	}
+}
+
+func TestDefaultPlayerNameFallsBackToYou(t *testing.T) {
+	manager := StatsManager{
+		CurrentUser: func() (*user.User, error) {
+			return nil, os.ErrInvalid
+		},
+		Hostname: func() (string, error) {
+			return "", os.ErrInvalid
+		},
+	}
+
+	if got := manager.DefaultPlayerName(); got != "YOU" {
+		t.Fatalf("DefaultPlayerName = %q, want YOU", got)
+	}
+}
+
+func TestLeaderboardInsertionAndModeSeparation(t *testing.T) {
+	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+
+	if _, rank, err := manager.AddLeaderboardScore(GameModeClassic, 100, "classic"); err != nil || rank != 1 {
+		t.Fatalf("classic AddLeaderboardScore rank=%d err=%v", rank, err)
+	}
+	if _, rank, err := manager.AddLeaderboardScore(GameModeQuest, 200, "quest"); err != nil || rank != 1 {
+		t.Fatalf("quest AddLeaderboardScore rank=%d err=%v", rank, err)
+	}
+
+	classic := manager.Leaderboard(GameModeClassic)
+	quest := manager.Leaderboard(GameModeQuest)
+	if len(classic) != 1 || classic[0].PlayerName != "classic" {
+		t.Fatalf("classic leaderboard = %#v", classic)
+	}
+	if len(quest) != 1 || quest[0].PlayerName != "quest" {
+		t.Fatalf("quest leaderboard = %#v", quest)
+	}
+}
+
+func TestLeaderboardCapsAtFiveAndKeepsDuplicateScores(t *testing.T) {
+	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+	for index, score := range []int{500, 400, 300, 200, 100} {
+		if _, _, err := manager.AddLeaderboardScore(GameModeClassic, score, string(rune('a'+index))); err != nil {
+			t.Fatalf("AddLeaderboardScore returned error: %v", err)
+		}
+	}
+
+	if rank := manager.QualifyingRank(GameModeClassic, 99); rank != 0 {
+		t.Fatalf("rank for below fifth = %d, want 0", rank)
+	}
+	if _, rank, err := manager.AddLeaderboardScore(GameModeClassic, 300, "dup"); err != nil || rank != 4 {
+		t.Fatalf("duplicate AddLeaderboardScore rank=%d err=%v", rank, err)
+	}
+	entries := manager.Leaderboard(GameModeClassic)
+	if len(entries) != 5 {
+		t.Fatalf("leaderboard length = %d, want 5", len(entries))
+	}
+	if entries[2].Score != 300 || entries[3].PlayerName != "dup" {
+		t.Fatalf("duplicate insertion order = %#v", entries)
+	}
+}
+
+func TestStatsMigratesBestScoreToQuestTop5(t *testing.T) {
+	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+	if err := os.MkdirAll(manager.BaseDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	old := `{"schema_version":1,"best_score":1234,"games_played":2}`
+	if err := os.WriteFile(filepath.Join(manager.BaseDir, statsFileName), []byte(old), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	entries := manager.Leaderboard(GameModeQuest)
+	if len(entries) != 1 || entries[0].Score != 1234 || entries[0].PlayerName != "YOU" {
+		t.Fatalf("migrated quest leaderboard = %#v", entries)
+	}
+}
+
+func TestNormalizePlayerNameRejectsControlsAndTruncates(t *testing.T) {
+	got := NormalizePlayerName("  abc\t\u001bdef" + strings.Repeat("x", 40))
+	if strings.ContainsAny(got, "\t\u001b") {
+		t.Fatalf("normalized name contains controls: %q", got)
+	}
+	if textDisplayWidth(got) > maxPlayerNameColumns {
+		t.Fatalf("normalized width = %d, want <= %d", textDisplayWidth(got), maxPlayerNameColumns)
+	}
+	if empty := NormalizePlayerName("\n\t"); empty != "YOU" {
+		t.Fatalf("empty normalized name = %q, want YOU", empty)
 	}
 }
 

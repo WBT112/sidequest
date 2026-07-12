@@ -28,12 +28,19 @@ sidequest \- play a tiny terminal game while waiting for a command
 runs a command in one tmux pane and opens a small terminal game in another.
 The game pane is focused first and starts on the first move. When the command
 finishes, the game freezes and Sidequest shows the command state, exit code or
-signal, runtime, and final score.
+signal, runtime, final score, and the local TOP 5.
 .PP
 Snake uses Command Heat. Heat rises with accumulated active Snake playtime,
 speeds up Snake movement, increases the food score multiplier, and is capped at
 the maximum Heat level. Time spent before the first move, paused, detached,
 after round over, or focused in the command pane does not raise Heat.
+.PP
+Round results can enter persistent local TOP 5 lists. Classic and Quest Mode use
+separate leaderboards. A qualifying score opens a name-entry field in the result
+panel, prefilled from the local
+.IR username@hostname .
+The player can edit it before saving; empty or invalid names are stored as
+.BR YOU .
 .PP
 The Snake arena is capped, centered in large panes, and rendered with two
 terminal columns per logical cell. Food placement prefers reachable cells within
@@ -108,6 +115,14 @@ Restart Snake after a round over while the command is still running.
 .B Q
 Leave the game pane. The command pane is not killed; finished sessions can then
 be cleaned up.
+.SH HIGHSCORES
+Sidequest keeps at most five scores per mode. Scores are sorted descending and
+equal scores keep deterministic insertion order. The result panel marks the
+current saved entry independently from the stored player name.
+.PP
+The default highscore name is resolved from the local user and hostname running
+Sidequest. It is not inferred from wrapped commands, SSH arguments, shell
+prompts, or remote terminal output.
 .SH REQUIREMENTS
 Sidequest requires Linux and
 .BR tmux (1)
@@ -128,9 +143,9 @@ Local stored run history. Captured terminal output may contain sensitive data
 such as tokens, environment values, file contents or application data.
 .TP
 .I ${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json
-Local Quest Mode statistics and achievements. This file stores game counters
-only, not command names, arguments, output, hostnames, working directories or
-activity timestamps.
+Local game statistics, achievements, and Classic/Quest TOP 5 lists. This file
+does not store command names, arguments, output, remote hosts, working
+directories or activity timestamps.
 .SH EXIT STATUS
 Sidequest returns zero when setup and attach handling succeed. The command
 runner records the child command result in Sidequest session metadata.

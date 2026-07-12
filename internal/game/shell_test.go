@@ -158,7 +158,7 @@ func TestRunUpdatesQuestStatsWhenCommandFinishes(t *testing.T) {
 		errc <- shell.Run(context.Background())
 	}()
 
-	waitForRenderedText(t, screen, "RUN FINISHED")
+	waitForRenderedText(t, screen, "COMMAND FINISHED")
 	if _, err := os.Stat(filepath.Join(statsDir, statsFileName)); err != nil {
 		t.Fatalf("stats file was not written: %v", err)
 	}
@@ -312,6 +312,9 @@ func TestRunWaitsForFirstMoveBeforeStartingSnake(t *testing.T) {
 		},
 		PollInterval: time.Hour,
 		GameInterval: 10 * time.Millisecond,
+		StatsManager: StatsManager{
+			BaseDir: filepath.Join(t.TempDir(), "sidequest"),
+		},
 	}
 
 	errc := make(chan error, 1)
@@ -326,7 +329,7 @@ func TestRunWaitsForFirstMoveBeforeStartingSnake(t *testing.T) {
 	}
 
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
-	waitForRenderedText(t, screen, "Round over")
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
 
 	if err := <-errc; err != nil {
@@ -345,6 +348,9 @@ func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
 		},
 		PollInterval: time.Hour,
 		GameInterval: 10 * time.Millisecond,
+		StatsManager: StatsManager{
+			BaseDir: filepath.Join(t.TempDir(), "sidequest"),
+		},
 	}
 
 	errc := make(chan error, 1)
@@ -354,7 +360,9 @@ func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
-	waitForRenderedText(t, screen, "R restart")
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	waitForRenderedText(t, screen, "R Restart")
 
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
 	waitForRenderedText(t, screen, "Arrows/WASD start")
@@ -517,6 +525,90 @@ func TestRunShowsCenteredResultPanelAfterRoundOver(t *testing.T) {
 		},
 		PollInterval: time.Hour,
 		GameInterval: 10 * time.Millisecond,
+		StatsManager: StatsManager{
+			BaseDir: filepath.Join(t.TempDir(), "sidequest"),
+		},
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	waitForRenderedText(t, screen, "GAME OVER")
+	waitForRenderedText(t, screen, "FINAL SCORE  0")
+	waitForRenderedText(t, screen, "TOP 5")
+	waitForRenderedText(t, screen, "R Restart")
+
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
+func TestRunHighscoreNameEntryReplacesDefaultAndPersists(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.SetSize(32, 12)
+	statsDir := filepath.Join(t.TempDir(), "sidequest")
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: 10 * time.Millisecond,
+		StatsManager: StatsManager{
+			BaseDir: statsDir,
+		},
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'A', tcell.ModNone))
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'L', tcell.ModNone))
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'X', tcell.ModNone))
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	waitForRenderedText(t, screen, "ALX")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	entries := (StatsManager{BaseDir: statsDir}).Leaderboard(GameModeClassic)
+	if len(entries) != 1 || entries[0].PlayerName != "ALX" {
+		t.Fatalf("leaderboard = %#v, want ALX entry", entries)
+	}
+}
+
+func TestRunNonQualifyingScoreSkipsNameEntry(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.SetSize(32, 12)
+	manager := StatsManager{BaseDir: filepath.Join(t.TempDir(), "sidequest")}
+	for _, score := range []int{500, 400, 300, 200, 100} {
+		if _, _, err := manager.AddLeaderboardScore(GameModeClassic, score, "seed"); err != nil {
+			t.Fatalf("AddLeaderboardScore returned error: %v", err)
+		}
+	}
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: 10 * time.Millisecond,
+		StatsManager: manager,
 	}
 
 	errc := make(chan error, 1)
@@ -527,12 +619,62 @@ func TestRunShowsCenteredResultPanelAfterRoundOver(t *testing.T) {
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
 	waitForRenderedText(t, screen, "GAME OVER")
-	waitForRenderedText(t, screen, "Final score: 0")
-	waitForRenderedText(t, screen, "R restart")
-
+	waitForMissingRenderedText(t, screen, "NEW HIGH SCORE")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
 	if err := <-errc; err != nil {
 		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
+func TestRunCommandCompletionDuringNameEntryKeepsPendingScore(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.SetSize(40, 14)
+	states := make(chan session.State, 4)
+	states <- session.State{Status: session.StatusRunning}
+	states <- session.State{Status: session.StatusCompleted}
+	statsDir := filepath.Join(t.TempDir(), "sidequest")
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			select {
+			case state := <-states:
+				return state, nil
+			default:
+				return session.State{Status: session.StatusCompleted}, nil
+			}
+		},
+		PollInterval: 20 * time.Millisecond,
+		GameInterval: 10 * time.Millisecond,
+		StatsManager: StatsManager{
+			BaseDir: statsDir,
+		},
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- shell.Run(context.Background())
+	}()
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	waitForRenderedText(t, screen, "Command state: completed")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'Z', tcell.ModNone))
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	waitForRenderedText(t, screen, "COMMAND FINISHED")
+	waitForRenderedText(t, screen, "Q Quit")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
+	waitForMissingRenderedText(t, screen, "Arrows/WASD start")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	entries := (StatsManager{BaseDir: statsDir}).Leaderboard(GameModeClassic)
+	if len(entries) != 1 || entries[0].PlayerName != "Z" {
+		t.Fatalf("leaderboard = %#v, want saved pending score", entries)
 	}
 }
 
@@ -564,8 +706,8 @@ func TestRunFreezesWithinPollIntervalWhenCommandFinishes(t *testing.T) {
 	}()
 
 	waitForRenderedText(t, screen, "Command finished. Q exit/cleanup")
-	waitForRenderedText(t, screen, "RUN FINISHED")
-	waitForRenderedText(t, screen, "Final score: 0")
+	waitForRenderedText(t, screen, "COMMAND FINISHED")
+	waitForRenderedText(t, screen, "FINAL SCORE  0")
 	waitForRenderedText(t, screen, "Exit code: 0")
 	waitForRenderedText(t, screen, "Runtime: 00:00:03")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))

@@ -3,6 +3,7 @@ package game
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -100,7 +101,21 @@ type viewState struct {
 	NextFocusCheck time.Time
 	Quest          *QuestState
 	FinalScore     ScoreBreakdown
+	RoundFinalized bool
+	ResultScore    int
+	Leaderboard    []LeaderboardEntry
+	CurrentRank    int
+	PendingScore   *PendingHighscore
 	StatsMessage   string
+}
+
+type PendingHighscore struct {
+	Score         int
+	Mode          string
+	Input         string
+	DefaultInput  string
+	ReplaceOnType bool
+	CurrentRank   int
 }
 
 func (s Shell) Run(ctx context.Context) error {
@@ -174,15 +189,19 @@ func (s Shell) Run(ctx context.Context) error {
 		case event := <-events:
 			switch typed := event.(type) {
 			case *tcell.EventKey:
+				if view.PendingScore != nil {
+					quit, handled := s.handlePendingHighscoreKey(&view, typed)
+					render(screen, view)
+					if quit {
+						return s.quit(view)
+					}
+					if handled {
+						continue
+					}
+				}
 				switch {
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'q' || typed.Rune() == 'Q'):
-					if session.IsTerminalStatus(view.SessionState) && s.OnQuitTerminal != nil {
-						return s.OnQuitTerminal()
-					}
-					if !session.IsTerminalStatus(view.SessionState) && s.OnQuitActive != nil {
-						return s.OnQuitActive()
-					}
-					return nil
+					return s.quit(view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'p' || typed.Rune() == 'P'):
 					now := s.now()
 					wasPaused := view.Pause.Active()
@@ -209,9 +228,14 @@ func (s Shell) Run(ctx context.Context) error {
 					view.RoundStarted = view.GameTime
 					view.RoundHeat = RestartStartHeat(view.CommandHeat.Level)
 					view.RoundCatchUp = view.RoundHeat < view.CommandHeat.Level
-					if view.Quest.Enabled() {
-						view.Quest.OnCrash()
-					}
+					view.RoundFinalized = false
+					view.ResultScore = 0
+					view.CurrentRank = 0
+					view.PendingScore = nil
+					view.Leaderboard = nil
+					view.StatsMessage = ""
+					boardWidth, boardHeight := boardSize(screen)
+					view.Quest = NewQuestState(mode, view.GameTime, s.Random, boardWidth, boardHeight)
 					updateViewHeat(&view, now)
 					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 					render(screen, view)
@@ -273,6 +297,9 @@ func (s Shell) Run(ctx context.Context) error {
 				if game.Over && view.Quest.Enabled() {
 					view.Quest.OnCrash()
 				}
+				if game.Over {
+					finalizeRound(&view, s.statsManager())
+				}
 				nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 				render(screen, view)
 				continue
@@ -333,16 +360,154 @@ func freezeView(view *viewState, now time.Time, statsManager StatsManager) {
 		return
 	}
 	view.Frozen = true
+	if view.Started && view.Game != nil && !view.Game.Over {
+		finalizeRound(view, statsManagerOrDefault(statsManager))
+	} else if !view.RoundFinalized {
+		refreshLeaderboard(view, statsManagerOrDefault(statsManager))
+	}
 	if view.Quest.Enabled() {
-		view.FinalScore = view.Quest.Complete(view.Game, view.Heat, now)
-		manager := statsManager
-		if manager.BaseDir == "" {
-			manager = DefaultStatsManager()
-		}
+		manager := statsManagerOrDefault(statsManager)
 		if _, err := manager.UpdateQuest(view.FinalScore, view.Quest); err != nil {
 			view.StatsMessage = "Stats not saved: " + err.Error()
 		}
 	}
+}
+
+func (s Shell) statsManager() StatsManager {
+	return statsManagerOrDefault(s.StatsManager)
+}
+
+func statsManagerOrDefault(manager StatsManager) StatsManager {
+	if manager.BaseDir == "" {
+		manager.BaseDir = DefaultStatsManager().BaseDir
+	}
+	return manager
+}
+
+func (s Shell) quit(view viewState) error {
+	if session.IsTerminalStatus(view.SessionState) && s.OnQuitTerminal != nil {
+		return s.OnQuitTerminal()
+	}
+	if !session.IsTerminalStatus(view.SessionState) && s.OnQuitActive != nil {
+		return s.OnQuitActive()
+	}
+	return nil
+}
+
+func finalizeRound(view *viewState, manager StatsManager) {
+	if view.RoundFinalized || view.Game == nil || !view.Started {
+		refreshLeaderboard(view, manager)
+		return
+	}
+	score := finalScore(view)
+	view.ResultScore = score
+	view.RoundFinalized = true
+	refreshLeaderboard(view, manager)
+	rank := manager.QualifyingRank(gameModeLabel(*view), score)
+	view.CurrentRank = rank
+	if rank == 0 {
+		return
+	}
+	defaultName := manager.DefaultPlayerName()
+	view.PendingScore = &PendingHighscore{
+		Score:         score,
+		Mode:          gameModeLabel(*view),
+		Input:         defaultName,
+		DefaultInput:  defaultName,
+		ReplaceOnType: true,
+		CurrentRank:   rank,
+	}
+}
+
+func finalScore(view *viewState) int {
+	if view.Quest.Enabled() {
+		if !view.Quest.Completed {
+			view.FinalScore = view.Quest.Complete(view.Game, view.Heat, view.GameTime)
+		} else {
+			view.FinalScore = view.Quest.Final
+		}
+		return view.FinalScore.FinalScore
+	}
+	if view.Game == nil {
+		return 0
+	}
+	return view.Game.Score
+}
+
+func refreshLeaderboard(view *viewState, manager StatsManager) {
+	view.Leaderboard = manager.Leaderboard(gameModeLabel(*view))
+}
+
+func (s Shell) handlePendingHighscoreKey(view *viewState, event *tcell.EventKey) (bool, bool) {
+	pending := view.PendingScore
+	if pending == nil {
+		return false, false
+	}
+	switch event.Key() {
+	case tcell.KeyEnter:
+		confirmPendingHighscore(view, s.statsManager())
+		return false, true
+	case tcell.KeyEscape:
+		confirmPendingHighscore(view, s.statsManager())
+		return true, true
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if pending.ReplaceOnType {
+			pending.Input = ""
+			pending.ReplaceOnType = false
+			return false, true
+		}
+		runes := []rune(pending.Input)
+		if len(runes) > 0 {
+			pending.Input = string(runes[:len(runes)-1])
+		}
+		return false, true
+	case tcell.KeyDelete:
+		pending.Input = ""
+		pending.ReplaceOnType = false
+		return false, true
+	case tcell.KeyCtrlU:
+		pending.Input = ""
+		pending.ReplaceOnType = false
+		return false, true
+	case tcell.KeyRune:
+		r := event.Rune()
+		if r == 'q' || r == 'Q' {
+			confirmPendingHighscore(view, s.statsManager())
+			return true, true
+		}
+		if r == 'r' || r == 'R' || r == 'p' || r == 'P' {
+			return false, true
+		}
+		if r < ' ' || r == '\u007f' {
+			return false, true
+		}
+		if pending.ReplaceOnType {
+			pending.Input = ""
+			pending.ReplaceOnType = false
+		}
+		pending.Input = NormalizePlayerName(pending.Input + string(r))
+		return false, true
+	default:
+		return false, true
+	}
+}
+
+func confirmPendingHighscore(view *viewState, manager StatsManager) {
+	pending := view.PendingScore
+	if pending == nil {
+		return
+	}
+	stats, rank, err := manager.AddLeaderboardScore(pending.Mode, pending.Score, pending.Input)
+	if err != nil {
+		view.StatsMessage = "Highscore not saved: " + err.Error()
+		view.Leaderboard = manager.Leaderboard(pending.Mode)
+		view.CurrentRank = 0
+		view.PendingScore = nil
+		return
+	}
+	view.Leaderboard = top5ForMode(stats, pending.Mode)
+	view.CurrentRank = rank
+	view.PendingScore = nil
 }
 
 func gameMode(mode string) string {
@@ -452,11 +617,14 @@ func render(screen tcell.Screen, view viewState) {
 	if view.Game != nil && view.Game.Over && !view.Frozen {
 		controlLine = "Round over. R restart  Q exit/cleanup  F10 detach/list"
 	}
-	if view.Quest.Enabled() {
+	if view.Quest.Enabled() && view.PendingScore == nil && !view.Frozen && (view.Game == nil || !view.Game.Over) {
 		controlLine = questLine(view)
 	}
 	if view.HeatNotice != "" {
 		controlLine = view.HeatNotice
+	}
+	if view.PendingScore != nil {
+		controlLine = "New high score. Type name  Enter confirm  Q save+exit"
 	}
 
 	lines := []renderLine{
@@ -645,39 +813,32 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 		return
 	}
 
-	title := "GAME OVER"
-	action := "R restart  Q exit"
+	lines := resultPanelLines(view, arena.RenderWidth())
+	if len(lines) == 0 {
+		return
+	}
+
 	accent := tcell.ColorOrange
 	if view.Frozen {
-		title = "RUN FINISHED"
-		action = "Q exit/cleanup"
 		accent = tcell.ColorAqua
 	}
-	lines := []string{
-		title,
-		"Final score: " + scoreText(view.Game),
-		"Max heat: " + fmt.Sprintf("%d", view.MaxHeat),
-		action,
-	}
-	if view.Quest.Enabled() && view.FinalScore.FinalScore > 0 {
-		lines = []string{
-			title,
-			fmt.Sprintf("Final score: %d", view.FinalScore.FinalScore),
-			fmt.Sprintf("Mission %+d  Alive %+d", view.FinalScore.MissionBonus, view.FinalScore.SurvivalBonus),
-			fmt.Sprintf("Combo %+d  Heat %+d", view.FinalScore.MaxComboBonus, view.FinalScore.MaxHeatBonus),
-		}
+	if view.PendingScore != nil {
+		accent = tcell.ColorYellow
 	}
 
 	panelWidth := maxTextWidth(lines) + 4
-	if panelWidth < 24 {
-		panelWidth = 24
+	if panelWidth < 30 {
+		panelWidth = 30
 	}
 	if panelWidth > arena.RenderWidth() {
 		panelWidth = arena.RenderWidth()
 	}
-	panelHeight := 8
-	if arena.Height < panelHeight {
-		panelHeight = 6
+	panelHeight := len(lines) + 2
+	if panelHeight > arena.Height {
+		panelHeight = arena.Height
+	}
+	if panelHeight < 5 {
+		panelHeight = 5
 	}
 	panelX := arena.X + (arena.RenderWidth()-panelWidth)/2
 	panelY := arena.Y + (arena.Height-panelHeight)/2
@@ -687,14 +848,127 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
 	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
 
-	lineYs := []int{panelY + 1, panelY + 2, panelY + panelHeight - 3, panelY + panelHeight - 2}
 	for index, line := range lines {
+		if index >= panelHeight-2 {
+			break
+		}
 		lineStyle := panelStyle
 		if index == 0 {
 			lineStyle = borderStyle
 		}
-		drawCenteredText(screen, panelX+1, lineYs[index], panelWidth-2, line, lineStyle)
+		drawCenteredText(screen, panelX+1, panelY+1+index, panelWidth-2, line, lineStyle)
 	}
+}
+
+func resultPanelLines(view viewState, maxWidth int) []string {
+	score := view.ResultScore
+	if score == 0 && view.PendingScore == nil && !view.RoundFinalized {
+		if view.Quest.Enabled() && view.FinalScore.FinalScore > 0 {
+			score = view.FinalScore.FinalScore
+		} else if view.Game != nil {
+			score = view.Game.Score
+		}
+	}
+	if view.PendingScore != nil {
+		if maxWidth < 34 {
+			return []string{
+				fmt.Sprintf("NEW HIGH SCORE %d", view.PendingScore.Score),
+				"NAME [" + truncateDisplay(view.PendingScore.Input, maxWidth-8) + "]",
+				"Enter confirm",
+			}
+		}
+		return []string{
+			"NEW HIGH SCORE",
+			"",
+			fmt.Sprintf("FINAL SCORE  %d", view.PendingScore.Score),
+			"",
+			"ENTER YOUR NAME",
+			"[ " + truncateDisplay(view.PendingScore.Input, maxWidth-8) + " ]",
+			"",
+			"Type name - Enter confirm",
+		}
+	}
+
+	title := "GAME OVER"
+	action := "R Restart     Q Quit"
+	if view.Frozen {
+		title = "COMMAND FINISHED"
+		action = "Q Quit"
+	}
+	if maxWidth < 34 {
+		lines := []string{
+			title,
+			fmt.Sprintf("%d", score),
+		}
+		lines = append(lines, leaderboardLines(view.Leaderboard, view.CurrentRank, maxWidth-2)...)
+		lines = append(lines, action)
+		if view.StatsMessage != "" {
+			lines = append(lines, truncateDisplay(view.StatsMessage, maxWidth-2))
+		}
+		return lines
+	}
+
+	lines := []string{
+		title,
+		"",
+		fmt.Sprintf("FINAL SCORE  %d", score),
+		"",
+		"TOP 5",
+	}
+	lines = append(lines, leaderboardLines(view.Leaderboard, view.CurrentRank, maxWidth-2)...)
+	for len(lines) < 10 {
+		lines = append(lines, "")
+	}
+	lines = append(lines, action)
+	if view.StatsMessage != "" {
+		lines = append(lines, truncateDisplay(view.StatsMessage, maxWidth-2))
+	}
+	return lines
+}
+
+func leaderboardLines(entries []LeaderboardEntry, currentRank int, maxWidth int) []string {
+	if len(entries) == 0 {
+		return []string{"No scores yet"}
+	}
+	lines := make([]string, 0, len(entries))
+	for index, entry := range entries {
+		marker := ""
+		if currentRank == index+1 {
+			marker = " <- YOU"
+		}
+		prefix := fmt.Sprintf("%d. %5d  ", index+1, entry.Score)
+		nameWidth := maxWidth - textDisplayWidth(prefix) - textDisplayWidth(marker)
+		if nameWidth < 3 {
+			nameWidth = 3
+		}
+		lines = append(lines, prefix+truncateDisplay(entry.PlayerName, nameWidth)+marker)
+	}
+	return lines
+}
+
+func truncateDisplay(text string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if textDisplayWidth(text) <= maxWidth {
+		return text
+	}
+	if maxWidth <= 3 {
+		return strings.Repeat(".", maxWidth)
+	}
+	limit := maxWidth - 3
+	var builder strings.Builder
+	width := 0
+	for _, r := range text {
+		rw := runeDisplayWidth(r)
+		if width+rw > limit {
+			break
+		}
+		builder.WriteRune(r)
+		width += rw
+	}
+	builder.WriteString("...")
+	return builder.String()
 }
 
 func fillRect(screen tcell.Screen, x int, y int, width int, height int, char rune, style tcell.Style) {
@@ -725,7 +999,11 @@ func maxTextWidth(lines []string) int {
 }
 
 func textDisplayWidth(text string) int {
-	return len([]rune(text))
+	width := 0
+	for _, r := range text {
+		width += runeDisplayWidth(r)
+	}
+	return width
 }
 
 func updateViewHeat(view *viewState, now time.Time) bool {
