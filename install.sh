@@ -1,0 +1,167 @@
+#!/bin/sh
+set -eu
+
+REPO="${SIDEQUEST_REPO:-WBT112/sidequest}"
+VERSION="${SIDEQUEST_VERSION:-}"
+INSTALL_DIR="${SIDEQUEST_INSTALL_DIR:-${HOME:-}/.local/bin}"
+DOWNLOAD_BASE_URL="${SIDEQUEST_DOWNLOAD_BASE_URL:-}"
+
+fail() {
+	printf 'sidequest install: %s\n' "$*" >&2
+	exit 1
+}
+
+need_cmd() {
+	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+uname_s() {
+	if [ "${SIDEQUEST_TEST_UNAME_S:-}" ]; then
+		printf '%s\n' "$SIDEQUEST_TEST_UNAME_S"
+	else
+		uname -s
+	fi
+}
+
+uname_m() {
+	if [ "${SIDEQUEST_TEST_UNAME_M:-}" ]; then
+		printf '%s\n' "$SIDEQUEST_TEST_UNAME_M"
+	else
+		uname -m
+	fi
+}
+
+detect_os() {
+	case "$(uname_s)" in
+		Linux) printf 'linux\n' ;;
+		Darwin) fail "native macOS is not supported yet; use a Linux release or follow the tracked macOS support work" ;;
+		MINGW*|MSYS*|CYGWIN*|Windows_NT) fail "native Windows shells are not supported; install Sidequest inside WSL 2" ;;
+		*) fail "unsupported operating system: $(uname_s)" ;;
+	esac
+}
+
+detect_arch() {
+	case "$(uname_m)" in
+		x86_64|amd64) printf 'amd64\n' ;;
+		aarch64|arm64) printf 'arm64\n' ;;
+		*) fail "unsupported architecture: $(uname_m)" ;;
+	esac
+}
+
+latest_version() {
+	need_cmd curl
+	api_url="https://api.github.com/repos/${REPO}/releases/latest"
+	tmp_json="$TMPDIR/latest.json"
+	token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+	if [ "$token" ]; then
+		curl -fsSL -H "Authorization: Bearer $token" "$api_url" -o "$tmp_json" || fail "could not resolve latest release; if the repository is private, authenticate with gh or set GITHUB_TOKEN"
+	else
+		curl -fsSL "$api_url" -o "$tmp_json" || fail "could not resolve latest public release; set SIDEQUEST_VERSION or authenticate for private releases"
+	fi
+	sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp_json" | head -n 1
+}
+
+download() {
+	source_url="$1"
+	destination="$2"
+	case "$source_url" in
+		file://*)
+			cp "${source_url#file://}" "$destination"
+			;;
+		/*|./*|../*)
+			cp "$source_url" "$destination"
+			;;
+		http://*|https://*)
+			need_cmd curl
+			token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+			if [ "$token" ]; then
+				curl -fsSL -H "Authorization: Bearer $token" "$source_url" -o "$destination"
+			else
+				curl -fsSL "$source_url" -o "$destination"
+			fi
+			;;
+		*)
+			fail "unsupported download URL: $source_url"
+			;;
+	esac
+}
+
+checksum_file_contains() {
+	checksums="$1"
+	asset="$2"
+	grep -F "  ${asset}" "$checksums" >/dev/null 2>&1 || grep -F " *${asset}" "$checksums" >/dev/null 2>&1
+}
+
+verify_checksum() {
+	checksums="$1"
+	asset="$2"
+	need_cmd tar
+	checksum_file_contains "$checksums" "$asset" || fail "checksums.txt does not contain $asset"
+	if command -v sha256sum >/dev/null 2>&1; then
+		(cd "$TMPDIR" && sha256sum -c --ignore-missing checksums.txt) >/dev/null || fail "checksum verification failed"
+	elif command -v shasum >/dev/null 2>&1; then
+		expected="$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1; exit }' "$checksums")"
+		actual="$(shasum -a 256 "$TMPDIR/$asset" | awk '{print $1}')"
+		[ "$expected" = "$actual" ] || fail "checksum verification failed"
+	else
+		fail "sha256sum or shasum is required to verify downloads"
+	fi
+}
+
+path_contains_dir() {
+	case ":${PATH:-}:" in
+		*:"$1":*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+install_binary() {
+	extracted="$1"
+	[ -f "$extracted/sidequest" ] || fail "archive did not contain sidequest binary"
+	[ ! -L "$INSTALL_DIR/sidequest" ] || fail "$INSTALL_DIR/sidequest is a symlink; refusing to replace it"
+	mkdir -p "$INSTALL_DIR"
+	chmod 755 "$extracted/sidequest"
+	tmp_target="$INSTALL_DIR/.sidequest.$$"
+	cp "$extracted/sidequest" "$tmp_target"
+	chmod 755 "$tmp_target"
+	mv "$tmp_target" "$INSTALL_DIR/sidequest"
+}
+
+TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/sidequest-install.XXXXXX")"
+trap 'rm -rf "$TMPDIR"' EXIT INT HUP TERM
+
+OS="$(detect_os)"
+ARCH="$(detect_arch)"
+
+if [ -z "$INSTALL_DIR" ]; then
+	fail "SIDEQUEST_INSTALL_DIR is empty and HOME is not set"
+fi
+
+if [ -z "$VERSION" ]; then
+	VERSION="$(latest_version)"
+	[ "$VERSION" ] || fail "latest release did not include a tag"
+fi
+
+VERSION_NO_V="${VERSION#v}"
+ASSET="sidequest_${VERSION_NO_V}_${OS}_${ARCH}.tar.gz"
+
+if [ "$DOWNLOAD_BASE_URL" ]; then
+	BASE="${DOWNLOAD_BASE_URL%/}"
+else
+	BASE="https://github.com/${REPO}/releases/download/${VERSION}"
+fi
+
+download "$BASE/$ASSET" "$TMPDIR/$ASSET"
+download "$BASE/checksums.txt" "$TMPDIR/checksums.txt"
+verify_checksum "$TMPDIR/checksums.txt" "$ASSET"
+
+mkdir "$TMPDIR/extract"
+tar -xzf "$TMPDIR/$ASSET" -C "$TMPDIR/extract"
+install_binary "$TMPDIR/extract"
+
+installed_version="$("$INSTALL_DIR/sidequest" --version 2>/dev/null || true)"
+printf 'Installed %s to %s/sidequest\n' "${installed_version:-sidequest}" "$INSTALL_DIR"
+if ! path_contains_dir "$INSTALL_DIR"; then
+	printf 'Add %s to PATH, for example:\n' "$INSTALL_DIR"
+	printf '  export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+fi

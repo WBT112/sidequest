@@ -6,6 +6,112 @@ Sidequest runs your command in one tmux pane and focuses a small Snake game in
 another. The command stays visible, the game starts on your first move, and when
 the command finishes Sidequest ends the round. 
 
+## Installation
+
+Sidequest currently supports Linux `amd64` and `arm64`. Windows users should run
+Sidequest inside WSL 2. Native macOS is not supported yet.
+
+Sidequest requires `tmux` at runtime:
+
+```bash
+sudo apt install tmux
+sudo dnf install tmux
+```
+
+### Quick Install With Curl
+
+Use this only after the repository and releases are public:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh
+```
+
+Safer inspect-before-run variant:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh
+less install.sh
+sh install.sh
+```
+
+The installer downloads the matching GitHub Release archive, verifies
+`checksums.txt`, and installs to `$HOME/.local/bin` by default. To install
+elsewhere:
+
+```bash
+SIDEQUEST_INSTALL_DIR=/usr/local/bin sh install.sh
+```
+
+### Private Repository Installation
+
+While this repository is private, use an authenticated GitHub path:
+
+```bash
+gh auth login
+gh release download v0.1.0 --repo WBT112/sidequest --pattern 'sidequest_*_linux_amd64.tar.gz'
+gh release download v0.1.0 --repo WBT112/sidequest --pattern checksums.txt
+```
+
+Token-based downloads are supported by `install.sh` through `GITHUB_TOKEN` or
+`GH_TOKEN`, but avoid placing tokens directly in shell history.
+
+### Debian/Ubuntu Package
+
+```bash
+sudo apt install ./sidequest_0.1.0_linux_amd64.deb
+sidequest --version
+sudo apt remove sidequest
+```
+
+### Fedora/RHEL Package
+
+```bash
+sudo dnf install ./sidequest_0.1.0_linux_amd64.rpm
+sidequest --version
+sudo dnf remove sidequest
+```
+
+### Windows Via WSL 2
+
+Install and run Sidequest inside a Linux distribution under WSL 2, not from
+PowerShell or `cmd.exe`:
+
+```bash
+sudo apt update
+sudo apt install tmux curl ca-certificates
+curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh
+sidequest --version
+```
+
+If the repository is still private, replace the anonymous curl step with the
+authenticated GitHub installation path above. PATH setup happens inside WSL, not
+in the Windows PATH.
+
+### macOS
+
+Native macOS is not supported yet. The application currently validates Linux
+terminals only, and release artifacts are built for Linux. macOS support needs a
+dedicated tmux/preflight test matrix before it is advertised.
+
+### Build From Source
+
+```bash
+go build -o sidequest ./cmd/sidequest
+```
+
+### Verify
+
+```bash
+command -v sidequest
+sidequest --version
+```
+
+If `$HOME/.local/bin` is not on `PATH`, add it in your shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
 ## Quick Start
 
 ```bash

@@ -139,11 +139,17 @@ prompts, or remote terminal output.
 .SH REQUIREMENTS
 Sidequest requires Linux and
 .BR tmux (1)
-at runtime.
+at runtime. Release artifacts currently target linux/amd64 and linux/arm64.
+Windows users should run Sidequest inside WSL 2. Native macOS is not supported
+yet.
 .SH FILES
 .TP
 .I /usr/bin/sidequest
 Installed Sidequest executable.
+.TP
+.I ${HOME}/.local/bin/sidequest
+Default user-local install path used by
+.BR install.sh .
 .TP
 .I /usr/share/doc/sidequest/
 Installed license and README documentation.
