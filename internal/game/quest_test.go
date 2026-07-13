@@ -438,6 +438,79 @@ func TestQuestShieldRecoveryPreservesSnakeLength(t *testing.T) {
 	assertSnakeValid(t, game.Snake, game.Width, game.Height)
 }
 
+func TestQuestShieldRecoveryReconcilesBoardObjects(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	recoveredHead := Point{X: 3, Y: 3}
+
+	tests := []struct {
+		name  string
+		setup func(*SnakeGame, *QuestState) time.Time
+		check func(*testing.T, *SnakeGame, *QuestState, time.Time)
+	}{
+		{
+			name: "normal food",
+			setup: func(game *SnakeGame, quest *QuestState) time.Time {
+				game.Food = recoveredHead
+				return time.Time{}
+			},
+			check: func(t *testing.T, game *SnakeGame, quest *QuestState, _ time.Time) {
+				t.Helper()
+				if !game.FoodValid(quest.ActiveObjectPoints()) {
+					t.Fatalf("food invalid after shield recovery: food=%#v snake=%#v", game.Food, game.Snake)
+				}
+			},
+		},
+		{
+			name: "golden byte",
+			setup: func(game *SnakeGame, quest *QuestState) time.Time {
+				expiresAt := now.Add(goldenByteTTL)
+				quest.Golden = GoldenByte{Active: true, Position: recoveredHead, ExpiresAt: expiresAt}
+				return expiresAt
+			},
+			check: func(t *testing.T, game *SnakeGame, quest *QuestState, expiresAt time.Time) {
+				t.Helper()
+				if !quest.Golden.Active || quest.Golden.ExpiresAt != expiresAt || game.Occupies(quest.Golden.Position) {
+					t.Fatalf("golden not safely reconciled: golden=%#v snake=%#v", quest.Golden, game.Snake)
+				}
+			},
+		},
+		{
+			name: "pickup",
+			setup: func(game *SnakeGame, quest *QuestState) time.Time {
+				expiresAt := now.Add(pickupTTL)
+				quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: recoveredHead, ExpiresAt: expiresAt}
+				return expiresAt
+			},
+			check: func(t *testing.T, game *SnakeGame, quest *QuestState, expiresAt time.Time) {
+				t.Helper()
+				if !quest.Pickup.Active || quest.Pickup.ExpiresAt != expiresAt || game.Occupies(quest.Pickup.Position) {
+					t.Fatalf("pickup not safely reconciled: pickup=%#v snake=%#v", quest.Pickup, game.Snake)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			game := NewSnakeGame(6, 6, func(int) int { return 0 })
+			game.Snake = []Point{{X: 5, Y: 2}, {X: 4, Y: 2}, {X: 3, Y: 2}, {X: 2, Y: 2}}
+			game.Dir = DirectionRight
+			quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 6, 6)
+			quest.Shield = TimedCharge{Charges: 1, ExpiresAt: now.Add(shieldDuration)}
+			expiresAt := test.setup(game, quest)
+
+			result := game.Step()
+			result = quest.TryCollisionEffects(game, result, now)
+
+			if result != StepMoved || game.Over || quest.Shield.Charges != 0 {
+				t.Fatalf("shield result=%v over=%t charges=%d", result, game.Over, quest.Shield.Charges)
+			}
+			assertQuestObjectsValid(t, game, quest)
+			test.check(t, game, quest, expiresAt)
+		})
+	}
+}
+
 func TestQuestPhaseUnsafeFallbackKeepsCollision(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(1, 1, func(int) int { return 0 })
@@ -451,6 +524,99 @@ func TestQuestPhaseUnsafeFallbackKeepsCollision(t *testing.T) {
 
 	if result != StepHitWall || !game.Over || quest.Phase.Charges != 1 {
 		t.Fatalf("phase fallback result=%v over=%t charges=%d", result, game.Over, quest.Phase.Charges)
+	}
+}
+
+func TestQuestPhaseRecoveryReconcilesBoardObjects(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	phaseTarget := Point{X: 0, Y: 2}
+
+	tests := []struct {
+		name  string
+		setup func(*SnakeGame, *QuestState) time.Time
+		check func(*testing.T, *SnakeGame, *QuestState, time.Time)
+	}{
+		{
+			name: "normal food",
+			setup: func(game *SnakeGame, quest *QuestState) time.Time {
+				game.Food = phaseTarget
+				return time.Time{}
+			},
+			check: func(t *testing.T, game *SnakeGame, quest *QuestState, _ time.Time) {
+				t.Helper()
+				if game.Food == phaseTarget || !game.FoodValid(quest.ActiveObjectPoints()) {
+					t.Fatalf("food not safely reconciled: food=%#v snake=%#v", game.Food, game.Snake)
+				}
+			},
+		},
+		{
+			name: "golden byte",
+			setup: func(game *SnakeGame, quest *QuestState) time.Time {
+				expiresAt := now.Add(goldenByteTTL)
+				quest.Golden = GoldenByte{Active: true, Position: phaseTarget, ExpiresAt: expiresAt}
+				return expiresAt
+			},
+			check: func(t *testing.T, game *SnakeGame, quest *QuestState, expiresAt time.Time) {
+				t.Helper()
+				if !quest.Golden.Active || quest.Golden.ExpiresAt != expiresAt || quest.Golden.Position == phaseTarget {
+					t.Fatalf("golden not safely reconciled: %#v", quest.Golden)
+				}
+			},
+		},
+		{
+			name: "pickup",
+			setup: func(game *SnakeGame, quest *QuestState) time.Time {
+				expiresAt := now.Add(pickupTTL)
+				quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: phaseTarget, ExpiresAt: expiresAt}
+				return expiresAt
+			},
+			check: func(t *testing.T, game *SnakeGame, quest *QuestState, expiresAt time.Time) {
+				t.Helper()
+				if !quest.Pickup.Active || quest.Pickup.ExpiresAt != expiresAt || quest.Pickup.Position == phaseTarget {
+					t.Fatalf("pickup not safely reconciled: %#v", quest.Pickup)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			game := NewSnakeGame(5, 5, func(int) int { return 0 })
+			game.Snake = []Point{{X: 4, Y: 2}, {X: 3, Y: 2}}
+			game.Dir = DirectionRight
+			game.Food = Point{X: 1, Y: 1}
+			quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 5, 5)
+			quest.Phase = TimedCharge{Charges: 1, ExpiresAt: now.Add(phaseDuration)}
+			expiresAt := test.setup(game, quest)
+
+			result := game.Step()
+			result = quest.TryCollisionEffects(game, result, now)
+
+			if result != StepMoved || game.Over || quest.Phase.Charges != 0 || game.Snake[0] != phaseTarget {
+				t.Fatalf("phase result=%v over=%t charges=%d head=%#v", result, game.Over, quest.Phase.Charges, game.Snake[0])
+			}
+			assertQuestObjectsValid(t, game, quest)
+			test.check(t, game, quest, expiresAt)
+		})
+	}
+}
+
+func TestQuestObjectReconciliationClearsObjectsWithoutFreeCells(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(2, 1, func(int) int { return 0 })
+	game.Snake = []Point{{X: 0, Y: 0}, {X: 1, Y: 0}}
+	game.Food = Point{X: 0, Y: 0}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 2, 1)
+	quest.Golden = GoldenByte{Active: true, Position: Point{X: 0, Y: 0}, ExpiresAt: now.Add(goldenByteTTL)}
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 1, Y: 0}, ExpiresAt: now.Add(pickupTTL)}
+
+	quest.ResizeObjects(game)
+
+	if quest.Golden.Active || quest.Pickup.Active {
+		t.Fatalf("quest objects remained without free cells: golden=%#v pickup=%#v", quest.Golden, quest.Pickup)
+	}
+	if game.Food.X >= 0 || game.Food.Y >= 0 {
+		t.Fatalf("food remained without free cells: %#v", game.Food)
 	}
 }
 
@@ -777,6 +943,31 @@ type fixedRandom int
 
 func (r fixedRandom) Intn(max int) int {
 	return int(r)
+}
+
+func assertQuestObjectsValid(t *testing.T, game *SnakeGame, quest *QuestState) {
+	t.Helper()
+	if !game.FoodValid(quest.ActiveObjectPoints()) {
+		t.Fatalf("food invalid: food=%#v snake=%#v golden=%#v pickup=%#v", game.Food, game.Snake, quest.Golden, quest.Pickup)
+	}
+	if quest.Golden.Active {
+		extraOccupied := []Point{game.Food}
+		if quest.Pickup.Active {
+			extraOccupied = append(extraOccupied, quest.Pickup.Position)
+		}
+		if !objectPointValid(game, quest.Golden.Position, extraOccupied) {
+			t.Fatalf("golden invalid: food=%#v snake=%#v golden=%#v pickup=%#v", game.Food, game.Snake, quest.Golden, quest.Pickup)
+		}
+	}
+	if quest.Pickup.Active {
+		extraOccupied := []Point{game.Food}
+		if quest.Golden.Active {
+			extraOccupied = append(extraOccupied, quest.Golden.Position)
+		}
+		if !objectPointValid(game, quest.Pickup.Position, extraOccupied) {
+			t.Fatalf("pickup invalid: food=%#v snake=%#v golden=%#v pickup=%#v", game.Food, game.Snake, quest.Golden, quest.Pickup)
+		}
+	}
 }
 
 type sequenceRandom struct {

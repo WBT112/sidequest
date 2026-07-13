@@ -267,7 +267,6 @@ func (s Shell) Run(ctx context.Context) error {
 					render(screen, view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'r' || typed.Rune() == 'R') && !view.Frozen && game.Over:
 					now := s.now()
-					updateViewGameTime(&view, now)
 					if view.RoundFinalized && !view.QuestStatsSaved {
 						updateQuestStats(&view, s.statsManager())
 					}
@@ -280,7 +279,9 @@ func (s Shell) Run(ctx context.Context) error {
 					view.Started = false
 					view.Pause.Manual = false
 					view.Clock = PlayClock{}
-					view.RoundStarted = view.GameTime
+					view.GameEpoch = now
+					view.GameTime = now
+					view.RoundStarted = now
 					view.CommandHeat = HeatByLevel(1)
 					view.FrozenHeat = HeatLevel{}
 					view.HeatFrozen = false
@@ -297,7 +298,7 @@ func (s Shell) Run(ctx context.Context) error {
 					view.StatsMessage = ""
 					view.Message = statsMessage
 					boardWidth, boardHeight := boardSize(screen)
-					view.Quest = NewQuestState(mode, view.GameTime, s.Random, boardWidth, boardHeight)
+					view.Quest = NewQuestState(mode, now, s.Random, boardWidth, boardHeight)
 					updateViewHeat(&view, now)
 					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 					render(screen, view)

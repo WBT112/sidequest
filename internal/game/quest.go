@@ -319,19 +319,20 @@ func (q *QuestState) TryCollisionEffects(game *SnakeGame, result StepResult, now
 	q.expireEffects(now)
 	if q.Phase.Charges > 0 && now.Before(q.Phase.ExpiresAt) && game.PhaseForward() {
 		q.Phase = TimedCharge{}
+		q.ResizeObjects(game)
 		q.notice("PHASE USED", now)
 		return StepMoved
 	}
 	if q.Shield.Charges > 0 && now.Before(q.Shield.ExpiresAt) {
 		q.Shield = TimedCharge{}
 		game.Recover()
-		q.EnsureFood(game)
+		q.ResizeObjects(game)
 		q.notice("SHIELD USED", now)
 		return StepMoved
 	}
 	if q.Warp.Charges > 0 && now.Before(q.Warp.ExpiresAt) && game.WarpToFreePoint(q.Rand, append([]Point{game.Food}, q.ActiveObjectPoints()...)) {
 		q.Warp = TimedCharge{}
-		q.EnsureFood(game)
+		q.ResizeObjects(game)
 		q.notice("WARP USED", now)
 		return StepMoved
 	}
@@ -344,7 +345,7 @@ func (q *QuestState) TryShieldRecovery(game *SnakeGame) bool {
 	}
 	q.Shield = TimedCharge{}
 	game.Recover()
-	q.EnsureFood(game)
+	q.ResizeObjects(game)
 	return true
 }
 

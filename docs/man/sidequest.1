@@ -34,9 +34,9 @@ command state, exit code or signal, runtime, final score, and the local TOP 5.
 Snake uses Command Heat. Heat rises with accumulated active Snake playtime,
 speeds up Snake movement, increases the food score multiplier, and is capped at
 the maximum Heat level. Time spent before the first move, paused, detached,
-after round over, after command completion, or focused in the command pane does
-not raise Heat. If the player continues after command completion, the reached
-Heat level still controls Snake speed and food value.
+after round over, in the command-finished choice, or focused in the command pane
+does not raise Heat. If the player continues after command completion, the same
+round resumes and Heat increases again only during active gameplay.
 .PP
 .B F9
 hides or restores the Sidequest UI by zooming the command pane inside the
@@ -146,8 +146,8 @@ Toggle manual pause. Manual pause is separate from command-pane focus pause.
 .TP
 .B C
 Continue the same Snake round when the wrapped command has finished and the
-round is still playable. The command is not run again, and Command Heat remains
-frozen at the level reached when the command ended.
+round is still playable. The command is not run again. Heat resumes increasing
+only during active gameplay after the player continues.
 .TP
 .B R
 Restart Snake after a round over while the command is still running.

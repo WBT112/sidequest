@@ -558,6 +558,59 @@ func TestRunRestartAfterRoundOverResetsHeat(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
+func TestRunRestartAfterLongQuestRoundResetsGameplayTimeline(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(5, 7)
+	base := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	var nowNanos atomic.Int64
+	nowNanos.Store(base.UnixNano())
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning, GameMode: GameModeQuest}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: 10 * time.Millisecond,
+		Random:       fixedRandom(2),
+		StatsManager: StatsManager{
+			BaseDir: filepath.Join(t.TempDir(), "sidequest"),
+		},
+		Now: func() time.Time {
+			return time.Unix(0, nowNanos.Load())
+		},
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "QUEST: Survive 60s 0/60")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModNone))
+	time.Sleep(20 * time.Millisecond)
+	nowNanos.Store(base.Add(61 * time.Second).UnixNano())
+	waitForRenderedText(t, screen, "HEAT 3")
+
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	for step := 0; step < 200 && !strings.Contains(screenText(screen), "NEW HIGH SCORE"); step++ {
+		nowNanos.Store(base.Add(61*time.Second + time.Duration(step+1)*20*time.Millisecond).UnixNano())
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	waitForRenderedText(t, screen, "R Restart")
+
+	restartTime := base.Add(2 * time.Minute)
+	nowNanos.Store(restartTime.UnixNano())
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
+
+	waitForRenderedText(t, screen, "QUEST: Survive 60s 0/60")
+	waitForRenderedText(t, screen, "HEAT 1")
+	if strings.Contains(screenText(screen), "Survive 60s -") {
+		t.Fatalf("restart produced negative survive progress:\n%s", screenText(screen))
+	}
+
+	cancelShell(t, cancel, errc)
+}
+
 func TestRunSavesQuestStatsBeforeRestartAfterRoundOver(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(5, 7)

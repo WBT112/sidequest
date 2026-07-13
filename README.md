@@ -74,8 +74,9 @@ sidequest --aug -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n"
 
 Classic mode keeps Snake simple and adds Command Heat: the longer you actively
 play, the faster Snake gets and the more food is worth. Time spent in the
-command pane or on pause does not raise Heat. After the command has finished,
-Heat stays frozen at the reached level while the round can continue.
+command pane, on pause, or in the command-finished choice does not raise Heat.
+If you press `C` after the command finishes, the same round continues and Heat
+resumes increasing only during active gameplay.
 
 Quest mode adds combo scoring, one mission per command, Golden Bytes, random
 arena pickups and other stuff.
