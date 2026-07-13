@@ -20,7 +20,7 @@ import (
 const (
 	DefaultResultFileName = "result.json"
 	DefaultOutputFileName = "output.txt"
-	DefaultRetentionLimit = 20
+	DefaultRetentionLimit = 100
 	privateDirectoryPerm  = 0o700
 	privateFilePerm       = 0o600
 )
