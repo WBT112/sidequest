@@ -65,36 +65,6 @@ func TestHeatScoreAwardUsesFixedPointMultiplier(t *testing.T) {
 	}
 }
 
-func TestRestartHeatRampCatchesUpWithoutExceedingCommandHeat(t *testing.T) {
-	if got := RestartStartHeat(1); got != 1 {
-		t.Fatalf("RestartStartHeat(1) = %d, want 1", got)
-	}
-	if got := RestartStartHeat(2); got != 2 {
-		t.Fatalf("RestartStartHeat(2) = %d, want 2", got)
-	}
-	if got := RestartStartHeat(6); got != 4 {
-		t.Fatalf("RestartStartHeat(6) = %d, want 4", got)
-	}
-
-	start := RestartStartHeat(6)
-	tests := []struct {
-		elapsed time.Duration
-		want    int
-	}{
-		{0, 4},
-		{19*time.Second + 999*time.Millisecond, 4},
-		{20 * time.Second, 5},
-		{39*time.Second + 999*time.Millisecond, 5},
-		{40 * time.Second, 6},
-		{10 * time.Minute, 6},
-	}
-	for _, test := range tests {
-		if got := RestartRampHeat(6, start, test.elapsed); got != test.want {
-			t.Fatalf("RestartRampHeat elapsed %s = %d, want %d", test.elapsed, got, test.want)
-		}
-	}
-}
-
 func TestUpcomingHeatWarnsBeforeNextThreshold(t *testing.T) {
 	next, remaining, ok := UpcomingHeat(25 * time.Second)
 	if !ok || next.Level != 2 || remaining != 5*time.Second {

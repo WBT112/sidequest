@@ -106,8 +106,6 @@ type viewState struct {
 	HeatNotice      string
 	NoticeUntil     time.Time
 	RoundStarted    time.Time
-	RoundHeat       int
-	RoundCatchUp    bool
 	Clock           PlayClock
 	GameEpoch       time.Time
 	GameTime        time.Time
@@ -186,7 +184,6 @@ func (s Shell) Run(ctx context.Context) error {
 		NoColor:      state.NoColor,
 		Game:         game,
 		RoundStarted: gameEpoch,
-		RoundHeat:    1,
 		GameEpoch:    gameEpoch,
 		GameTime:     gameEpoch,
 		Quest:        NewQuestState(mode, gameEpoch, s.Random, boardWidth, boardHeight),
@@ -221,6 +218,8 @@ func (s Shell) Run(ctx context.Context) error {
 					case typed.Key() == tcell.KeyRune && (typed.Rune() == 'c' || typed.Rune() == 'C'):
 						view.Completion = CompletionContinue
 						view.Pause.Completion = false
+						view.HeatFrozen = false
+						view.FrozenHeat = HeatLevel{}
 						game.ClearPendingDirections()
 						updateViewGameTime(&view, now)
 						updateViewHeat(&view, now)
@@ -276,10 +275,15 @@ func (s Shell) Run(ctx context.Context) error {
 					view.Game = game
 					view.Started = false
 					view.Pause.Manual = false
-					view.Clock.Stop(now)
+					view.Clock = PlayClock{}
 					view.RoundStarted = view.GameTime
-					view.RoundHeat = RestartStartHeat(view.CommandHeat.Level)
-					view.RoundCatchUp = view.RoundHeat < view.CommandHeat.Level
+					view.CommandHeat = HeatByLevel(1)
+					view.FrozenHeat = HeatLevel{}
+					view.HeatFrozen = false
+					view.Heat = HeatByLevel(1)
+					view.MaxHeat = 0
+					view.HeatNotice = ""
+					view.NoticeUntil = time.Time{}
 					view.RoundFinalized = false
 					view.QuestStatsSaved = false
 					view.ResultScore = 0
@@ -398,7 +402,9 @@ func (s Shell) Run(ctx context.Context) error {
 				}
 				updateViewGameTime(&view, now)
 				updateViewHeat(&view, now)
-				freezeCommandHeat(&view)
+				if view.Completion != CompletionContinue {
+					freezeCommandHeat(&view)
+				}
 				if shouldOfferCompletionDecision(&view) {
 					view.Completion = CompletionUndecided
 					view.Pause.Completion = true
@@ -1326,12 +1332,7 @@ func updateViewHeat(view *viewState, now time.Time) bool {
 	if view.MaxHeat < commandHeat.Level {
 		view.MaxHeat = commandHeat.Level
 	}
-
-	activeLevel := commandHeat.Level
-	if view.RoundCatchUp {
-		activeLevel = RestartRampHeat(commandHeat.Level, view.RoundHeat, view.GameTime.Sub(view.RoundStarted))
-	}
-	view.Heat = HeatByLevel(activeLevel)
+	view.Heat = commandHeat
 
 	view.HeatNotice = ""
 	if !view.Frozen && !view.HeatFrozen {

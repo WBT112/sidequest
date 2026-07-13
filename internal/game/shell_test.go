@@ -438,6 +438,56 @@ func TestRunRestartsSnakeAfterRoundOver(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
+func TestRunRestartAfterRoundOverResetsHeat(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(5, 7)
+	base := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	var nowNanos atomic.Int64
+	nowNanos.Store(base.UnixNano())
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: 10 * time.Millisecond,
+		StatsManager: StatsManager{
+			BaseDir: filepath.Join(t.TempDir(), "sidequest"),
+		},
+		Now: func() time.Time {
+			return time.Unix(0, nowNanos.Load())
+		},
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModNone))
+	waitForRenderedText(t, screen, "Arrows/WASD move")
+	nowNanos.Store(base.Add(35 * time.Second).UnixNano())
+	waitForRenderedText(t, screen, "Heat: 2/6")
+
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	for step := 0; step < 200 && !strings.Contains(screenText(screen), "NEW HIGH SCORE"); step++ {
+		nowNanos.Store(base.Add(35*time.Second + time.Duration(step+1)*20*time.Millisecond).UnixNano())
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitForRenderedText(t, screen, "NEW HIGH SCORE")
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	waitForRenderedText(t, screen, "R Restart")
+
+	nowNanos.Store(base.Add(2 * time.Minute).UnixNano())
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	waitForRenderedText(t, screen, "Heat: 1/6")
+	if strings.Contains(screenText(screen), "Heat: 2/6") {
+		t.Fatalf("restart carried heat into new round:\n%s", screenText(screen))
+	}
+
+	cancelShell(t, cancel, errc)
+}
+
 func TestRunSavesQuestStatsBeforeRestartAfterRoundOver(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(5, 7)
@@ -658,7 +708,7 @@ func TestRunContinueAfterCommandFinishResumesSameRoundWithFullInterval(t *testin
 	cancelShell(t, cancel, errc)
 }
 
-func TestRunContinueAfterCommandFinishFreezesCommandHeat(t *testing.T) {
+func TestRunContinueAfterCommandFinishKeepsCurrentRoundHeatProgression(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(70, 12)
 	base := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
@@ -691,13 +741,17 @@ func TestRunContinueAfterCommandFinishFreezesCommandHeat(t *testing.T) {
 
 	completed.Store(true)
 	waitForRenderedText(t, screen, "C Continue")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
 	nowNanos.Store(base.Add(70 * time.Second).UnixNano())
 	time.Sleep(30 * time.Millisecond)
 	if strings.Contains(screenText(screen), "Heat: 3/6") {
-		t.Fatalf("command heat increased after post-command continue:\n%s", screenText(screen))
+		t.Fatalf("heat increased while command-finished modal blocked gameplay:\n%s", screenText(screen))
 	}
 	waitForRenderedText(t, screen, "Heat: 2/6")
+
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	waitForMissingRenderedText(t, screen, "C Continue")
+	nowNanos.Store(base.Add(96 * time.Second).UnixNano())
+	waitForRenderedText(t, screen, "Heat: 3/6")
 	cancelShell(t, cancel, errc)
 }
 
@@ -1200,7 +1254,6 @@ func TestUpdateViewHeatUsesActivePlayClock(t *testing.T) {
 		GameEpoch:    now,
 		GameTime:     now.Add(60 * time.Second),
 		RoundStarted: now,
-		RoundHeat:    1,
 	}
 
 	updateViewHeat(&view, now)
@@ -1227,6 +1280,22 @@ func TestResizePauseStopsPlayClock(t *testing.T) {
 	}
 	if got := view.Clock.Elapsed(now.Add(time.Hour)); got != 15*time.Second {
 		t.Fatalf("elapsed while resize-paused = %s, want 15s", got)
+	}
+}
+
+func TestUpdateViewHeatIgnoresPausedClockTime(t *testing.T) {
+	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	view := viewState{
+		Clock:        PlayClock{Accumulated: 29 * time.Second, ActiveSince: now.Add(-10 * time.Minute), Running: false},
+		GameEpoch:    now,
+		GameTime:     now.Add(10 * time.Minute),
+		RoundStarted: now,
+	}
+
+	updateViewHeat(&view, now.Add(10*time.Minute))
+
+	if view.Heat.Level != 1 {
+		t.Fatalf("Heat level = %d, want paused time ignored at level 1", view.Heat.Level)
 	}
 }
 

@@ -6,9 +6,8 @@ import (
 )
 
 const (
-	baseFoodScore       = 10
-	heatWarningWindow   = 5 * time.Second
-	restartCatchUpEvery = 20 * time.Second
+	baseFoodScore     = 10
+	heatWarningWindow = 5 * time.Second
 )
 
 type HeatLevel struct {
@@ -63,34 +62,6 @@ func UpcomingHeat(elapsed time.Duration) (HeatLevel, time.Duration, bool) {
 		}
 	}
 	return defaultHeatCurve[len(defaultHeatCurve)-1], 0, false
-}
-
-func RestartStartHeat(commandHeatLevel int) int {
-	if commandHeatLevel <= 2 {
-		return commandHeatLevel
-	}
-	start := commandHeatLevel - 2
-	if start < 1 {
-		return 1
-	}
-	return start
-}
-
-func RestartRampHeat(commandHeatLevel int, restartStartLevel int, roundElapsed time.Duration) int {
-	if commandHeatLevel < 1 {
-		commandHeatLevel = 1
-	}
-	if restartStartLevel < 1 {
-		restartStartLevel = 1
-	}
-	if roundElapsed < 0 {
-		roundElapsed = 0
-	}
-	level := restartStartLevel + int(roundElapsed/restartCatchUpEvery)
-	if level > commandHeatLevel {
-		return commandHeatLevel
-	}
-	return level
 }
 
 func (h HeatLevel) ScoreAward(base int) int {
