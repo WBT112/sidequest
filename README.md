@@ -62,6 +62,8 @@ sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i";
 - `F12` switches between Snake and the command pane.
 - Snake focus-pauses while the command pane is active and resumes when the game
   pane is active again, unless you paused manually.
+- In the command pane, `Page Up` and `Page Down` scroll pages; arrow up and
+  arrow down scroll line by line.
 - `F10` detaches back to your shell. If the command is still running, Sidequest
   prints the `sidequest attach <id>` command.
 - `R` restarts Snake after a round over while the command keeps running.

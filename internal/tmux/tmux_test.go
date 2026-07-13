@@ -37,13 +37,17 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-format"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-border-style", "fg=colour244"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "pane-active-border-style", "fg=brightwhite,bold"},
-		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.0", "-T", "Command - F9 hide, F12 Snake, F10 shell"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.0", "-T", "Command - PgUp/PgDn scroll, F12 Snake, F10 shell"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "remain-on-exit", "on"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "split-window", "-v", "-l", "16", "-t", "sidequest-abc123:0.0"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.1", "-T", "Snake - arrows/WASD, F9 hide, F12 Command, F10 shell"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F12", "select-pane", "-t", ":.+"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F10", "detach-client"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F9", "if-shell", "-F", "#{==:#{@sidequest_boss_hidden},1}"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "PPage", "if-shell", "-F", "#{==:#{pane_index},0}"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "NPage", "if-shell", "-F", "#{==:#{pane_index},0}"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "Up", "if-shell", "-F", "#{==:#{pane_index},0}"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "Down", "if-shell", "-F", "#{==:#{pane_index},0}"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.1"},
 	}
 
@@ -109,11 +113,37 @@ func TestStartPreservesPaneTitleStrings(t *testing.T) {
 
 	joined := runner.joinedCalls()
 	for _, title := range []string{
-		"Command - F9 hide, F12 Snake, F10 shell",
+		"Command - PgUp/PgDn scroll, F12 Snake, F10 shell",
 		"Snake - arrows/WASD, F9 hide, F12 Command, F10 shell",
 	} {
 		if !strings.Contains(joined, title) {
 			t.Fatalf("pane title %q was not preserved:\n%s", title, joined)
+		}
+	}
+}
+
+func TestStartBindsCommandPaneScrollKeysOnlyForCommandPane(t *testing.T) {
+	runner := &recordingRunner{}
+	layout := Layout{CommandRunner: runner}
+	runtimeSession := session.Session{ID: "scroll", SocketPath: "/tmp/sidequest-1000/scroll/command.sock"}
+
+	if _, err := layout.Start(
+		runtimeSession,
+		[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+		[]string{"/usr/bin/sidequest", "__sidequest-game", "/tmp/sidequest-1000/scroll/state.json"},
+	); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	joined := runner.joinedCalls()
+	for _, want := range []string{
+		"bind-key -n PPage if-shell -F #{==:#{pane_index},0} copy-mode -e -u send-keys PPage",
+		"bind-key -n NPage if-shell -F #{==:#{pane_index},0} copy-mode -e ; send-keys -X page-down send-keys NPage",
+		"bind-key -n Up if-shell -F #{==:#{pane_index},0} copy-mode -e ; send-keys -X cursor-up send-keys Up",
+		"bind-key -n Down if-shell -F #{==:#{pane_index},0} copy-mode -e ; send-keys -X cursor-down send-keys Down",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("scroll key binding missing %q:\n%s", want, joined)
 		}
 	}
 }

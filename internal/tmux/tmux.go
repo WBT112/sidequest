@@ -51,6 +51,8 @@ const (
 	paneBorderStatus      = "top"
 	paneBorderStyle       = "fg=colour244"
 	paneActiveBorderStyle = "fg=brightwhite,bold"
+	commandPaneTitle      = "Command - PgUp/PgDn scroll, F12 Snake, F10 shell"
+	gamePaneTitle         = "Snake - arrows/WASD, F9 hide, F12 Command, F10 shell"
 )
 
 func (l Layout) Start(runtimeSession session.Session, commandRunner []string, gameRunner []string) (Info, error) {
@@ -107,7 +109,7 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("set-option", "-t", info.SessionName, "pane-active-border-style", paneActiveBorderStyle); err != nil {
 		return cleanup(fmt.Errorf("configure active pane border style: %w", err))
 	}
-	if err := run("select-pane", "-t", info.SessionName+":0.0", "-T", "Command - F9 hide, F12 Snake, F10 shell"); err != nil {
+	if err := run("select-pane", "-t", info.SessionName+":0.0", "-T", commandPaneTitle); err != nil {
 		return cleanup(fmt.Errorf("title command pane: %w", err))
 	}
 	if err := run("set-option", "-t", info.SessionName, "remain-on-exit", "on"); err != nil {
@@ -116,11 +118,11 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("split-window", "-v", "-l", "16", "-t", info.SessionName+":0.0", shellJoin(gameRunner)); err != nil {
 		return cleanup(fmt.Errorf("create placeholder pane: %w", err))
 	}
-	gamePaneTitle := "Snake - arrows/WASD, F9 hide, F12 Command, F10 shell"
+	currentGamePaneTitle := gamePaneTitle
 	if outputRunner, ok := runner.(OutputRunner); ok {
-		gamePaneTitle = centeredPaneTitle(outputRunner, tmuxPath, baseArgs, info.SessionName+":0.1", gamePaneTitle)
+		currentGamePaneTitle = centeredPaneTitle(outputRunner, tmuxPath, baseArgs, info.SessionName+":0.1", currentGamePaneTitle)
 	}
-	if err := run("select-pane", "-t", info.SessionName+":0.1", "-T", gamePaneTitle); err != nil {
+	if err := run("select-pane", "-t", info.SessionName+":0.1", "-T", currentGamePaneTitle); err != nil {
 		return cleanup(fmt.Errorf("title game pane: %w", err))
 	}
 	if err := run("bind-key", "-n", "F12", "select-pane", "-t", ":.+"); err != nil {
@@ -132,11 +134,30 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("bind-key", "-n", "F9", "if-shell", "-F", "#{==:#{"+bossHiddenOption+"},1}", bossRestoreCommand(info), bossHideCommand(info)); err != nil {
 		return cleanup(fmt.Errorf("bind F9 boss key: %w", err))
 	}
+	for _, binding := range commandPaneScrollBindings() {
+		if err := run("bind-key", "-n", binding.key, "if-shell", "-F", "#{==:#{pane_index},0}", binding.command, "send-keys "+binding.key); err != nil {
+			return cleanup(fmt.Errorf("bind command pane scroll key %s: %w", binding.key, err))
+		}
+	}
 	if err := run("select-pane", "-t", info.SessionName+":0.1"); err != nil {
 		return cleanup(fmt.Errorf("focus game pane: %w", err))
 	}
 
 	return info, nil
+}
+
+type commandPaneScrollBinding struct {
+	key     string
+	command string
+}
+
+func commandPaneScrollBindings() []commandPaneScrollBinding {
+	return []commandPaneScrollBinding{
+		{key: "PPage", command: "copy-mode -e -u"},
+		{key: "NPage", command: "copy-mode -e ; send-keys -X page-down"},
+		{key: "Up", command: "copy-mode -e ; send-keys -X cursor-up"},
+		{key: "Down", command: "copy-mode -e ; send-keys -X cursor-down"},
+	}
 }
 
 func bossHideCommand(info Info) string {
