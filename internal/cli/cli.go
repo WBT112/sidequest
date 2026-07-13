@@ -607,7 +607,9 @@ func (a App) runCommandRunner(socketPath string) error {
 		if execute == nil {
 			execute = commandexec.DefaultExecutor().Run
 		}
-		return execute(runtimeSession, command)
+		err = execute(runtimeSession, command)
+		a.publishCommandPaneState(runtimeSession)
+		return err
 	}
 
 	receive := a.ReceiveExchange
@@ -627,9 +629,26 @@ func (a App) runCommandRunner(socketPath string) error {
 		if err := exchange.ReportStartup(session.CommandStartup{Status: session.CommandStartupStarted}); err != nil {
 			return err
 		}
-		return execute(runtimeSession, command)
+		err := execute(runtimeSession, command)
+		a.publishCommandPaneState(runtimeSession)
+		return err
 	}
-	return commandexec.DefaultExecutor().RunWithStartupReporter(runtimeSession, command, exchange)
+	err = commandexec.DefaultExecutor().RunWithStartupReporter(runtimeSession, command, exchange)
+	a.publishCommandPaneState(runtimeSession)
+	return err
+}
+
+func (a App) publishCommandPaneState(runtimeSession session.Session) {
+	state, err := session.ReadState(runtimeSession)
+	if err != nil {
+		return
+	}
+	record := session.Record{Session: runtimeSession, State: state}
+	info, owned := ownedInfoFromRecord(record)
+	if !owned {
+		return
+	}
+	_ = tmux.Layout{}.SetCommandState(info, state)
 }
 
 func (a App) runGameShell(statePath string) error {
@@ -674,7 +693,7 @@ func (a App) runGameShell(statePath string) error {
 			}
 			return tmux.Layout{}.CaptureCommandPreview(info)
 		},
-		OnQuitTerminal: func() error {
+		UpdatePanePause: func(paused bool) error {
 			state, err := session.ReadState(runtimeSession)
 			if err != nil {
 				return err
@@ -684,7 +703,7 @@ func (a App) runGameShell(statePath string) error {
 			if !owned {
 				return nil
 			}
-			return a.detachClients(info)
+			return tmux.Layout{}.SetGamePaused(info, paused)
 		},
 	}
 	if a.RunShell != nil {

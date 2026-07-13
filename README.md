@@ -70,8 +70,8 @@ sidequest --aug -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n"
 - `F10` detaches back to your shell. If the command is still running, Sidequest
   prints the `sidequest attach <id>` command.
 - `R` restarts Snake after a round over while the command keeps running.
-- After the command finishes, `C` continues the current round and `Q` finalizes
-  and quits.
+- After the command finishes, `C` continues the current round. Use `F10` to
+  return to your shell.
 
 Classic mode keeps Snake simple and adds Command Heat: the longer you actively
 play, the faster Snake gets and the more food is worth. Time spent in the

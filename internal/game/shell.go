@@ -21,6 +21,7 @@ const defaultInitialRenderDelay = 80 * time.Millisecond
 type StateReader func() (session.State, error)
 type FocusReader func() (bool, error)
 type CommandPreviewReader func() (string, error)
+type PanePauseWriter func(paused bool) error
 
 type CommandCompletionChoice int
 
@@ -28,7 +29,6 @@ const (
 	CompletionNone CommandCompletionChoice = iota
 	CompletionUndecided
 	CompletionContinue
-	CompletionQuit
 )
 
 type PauseState struct {
@@ -85,7 +85,7 @@ type Shell struct {
 	ReadState          StateReader
 	ReadFocus          FocusReader
 	ReadCommandPreview CommandPreviewReader
-	OnQuitTerminal     func() error
+	UpdatePanePause    PanePauseWriter
 	Random             RandomSource
 	StatsManager       StatsManager
 	PollInterval       time.Duration
@@ -127,6 +127,8 @@ type viewState struct {
 	StatsMessage    string
 	Completion      CommandCompletionChoice
 	CommandPreview  string
+	PanePauseKnown  bool
+	PanePaused      bool
 }
 
 type PendingHighscore struct {
@@ -198,6 +200,7 @@ func (s Shell) Run(ctx context.Context) error {
 		Quest:          NewQuestState(mode, gameEpoch, s.Random, boardWidth, boardHeight),
 	}
 	s.syncFocus(&view, now, true)
+	s.syncPanePause(&view)
 	s.syncCommandPreview(&view)
 	s.syncPlayClock(&view, now)
 	updateViewGameTime(&view, now)
@@ -213,11 +216,8 @@ func (s Shell) Run(ctx context.Context) error {
 			switch typed := event.(type) {
 			case *tcell.EventKey:
 				if view.PendingScore != nil {
-					quit, handled := s.handlePendingHighscoreKey(&view, typed)
+					handled := s.handlePendingHighscoreKey(&view, typed)
 					render(screen, view)
-					if quit {
-						return s.quit(view)
-					}
 					if handled {
 						continue
 					}
@@ -233,20 +233,12 @@ func (s Shell) Run(ctx context.Context) error {
 						game.ClearPendingDirections()
 						updateViewGameTime(&view, now)
 						updateViewHeat(&view, now)
+						s.syncPanePause(&view)
 						if view.Started && !view.Pause.Active() && !game.Over {
 							view.Clock.Start(now)
 						}
 						nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 						render(screen, view)
-						continue
-					case typed.Key() == tcell.KeyRune && (typed.Rune() == 'q' || typed.Rune() == 'Q'):
-						view.Completion = CompletionQuit
-						view.Pause.Completion = false
-						finalizeCompletionQuit(&view, s.statsManager())
-						render(screen, view)
-						if view.PendingScore == nil {
-							return s.quit(view)
-						}
 						continue
 					default:
 						render(screen, view)
@@ -254,8 +246,6 @@ func (s Shell) Run(ctx context.Context) error {
 					}
 				}
 				switch {
-				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'q' || typed.Rune() == 'Q') && session.IsTerminalStatus(view.SessionState):
-					return s.quit(view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'p' || typed.Rune() == 'P'):
 					now := s.now()
 					wasPaused := view.Pause.Active()
@@ -270,6 +260,7 @@ func (s Shell) Run(ctx context.Context) error {
 					}
 					updateViewGameTime(&view, now)
 					updateViewHeat(&view, now)
+					s.syncPanePause(&view)
 					render(screen, view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'r' || typed.Rune() == 'R') && !view.Frozen && game.Over:
 					now := s.now()
@@ -284,6 +275,7 @@ func (s Shell) Run(ctx context.Context) error {
 					view.Game = game
 					view.Started = false
 					view.Pause.Manual = false
+					s.syncPanePause(&view)
 					view.Clock = PlayClock{}
 					view.GameEpoch = now
 					view.GameTime = now
@@ -332,6 +324,7 @@ func (s Shell) Run(ctx context.Context) error {
 					view.Clock.Stop(now)
 					updateViewGameTime(&view, now)
 					updateViewHeat(&view, now)
+					s.syncPanePause(&view)
 				} else {
 					view.Pause.Resize = false
 					view.Quest.ResizeObjects(game)
@@ -341,6 +334,7 @@ func (s Shell) Run(ctx context.Context) error {
 						view.Clock.Start(now)
 					}
 					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
+					s.syncPanePause(&view)
 				}
 				render(screen, view)
 			}
@@ -349,6 +343,9 @@ func (s Shell) Run(ctx context.Context) error {
 			focusChanged, focusResumed := false, false
 			if !now.Before(view.NextFocusCheck) {
 				focusChanged, focusResumed = s.syncFocus(&view, now, true)
+				if focusChanged {
+					s.syncPanePause(&view)
+				}
 			}
 			clockStarted, _ := s.syncPlayClock(&view, now)
 			updateViewGameTime(&view, now)
@@ -367,6 +364,9 @@ func (s Shell) Run(ctx context.Context) error {
 					continue
 				}
 				stepFocusChanged, stepFocusResumed := s.syncFocus(&view, now, true)
+				if stepFocusChanged {
+					s.syncPanePause(&view)
+				}
 				if stepFocusResumed {
 					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 				}
@@ -419,6 +419,7 @@ func (s Shell) Run(ctx context.Context) error {
 				if shouldOfferCompletionDecision(&view) {
 					view.Completion = CompletionUndecided
 					view.Pause.Completion = true
+					s.syncPanePause(&view)
 					if view.Game != nil {
 						view.Game.ClearPendingDirections()
 					}
@@ -583,26 +584,6 @@ func shouldOfferCompletionDecision(view *viewState) bool {
 		!view.Game.Over
 }
 
-func finalizeCompletionQuit(view *viewState, manager StatsManager) {
-	view.Frozen = true
-	if shouldFinalizeCompletionQuit(view) {
-		finalizeRound(view, manager)
-	} else if !view.RoundFinalized {
-		refreshLeaderboard(view, manager)
-	}
-	updateQuestStats(view, manager)
-}
-
-func shouldFinalizeCompletionQuit(view *viewState) bool {
-	if view == nil || !view.Started || view.Game == nil || view.Game.Over {
-		return false
-	}
-	if view.SessionState == session.StatusCompleted {
-		return true
-	}
-	return currentRoundScore(view) > 0
-}
-
 func updateQuestStats(view *viewState, manager StatsManager) {
 	if view.Quest.Enabled() && view.RoundFinalized && !view.QuestStatsSaved {
 		if _, err := manager.UpdateQuest(view.FinalScore, view.Quest); err != nil {
@@ -633,13 +614,6 @@ func statsManagerOrDefault(manager StatsManager) StatsManager {
 		manager.BaseDir = DefaultStatsManager().BaseDir
 	}
 	return manager
-}
-
-func (s Shell) quit(view viewState) error {
-	if session.IsTerminalStatus(view.SessionState) && s.OnQuitTerminal != nil {
-		return s.OnQuitTerminal()
-	}
-	return nil
 }
 
 func finalizeRound(view *viewState, manager StatsManager) {
@@ -693,63 +667,52 @@ func refreshLeaderboard(view *viewState, manager StatsManager) {
 	view.Leaderboard = manager.Leaderboard(gameModeLabel(*view))
 }
 
-func (s Shell) handlePendingHighscoreKey(view *viewState, event *tcell.EventKey) (bool, bool) {
+func (s Shell) handlePendingHighscoreKey(view *viewState, event *tcell.EventKey) bool {
 	pending := view.PendingScore
 	if pending == nil {
-		return false, false
+		return false
 	}
 	switch event.Key() {
 	case tcell.KeyEnter:
 		confirmPendingHighscore(view, s.statsManager())
-		return false, true
+		return true
 	case tcell.KeyEscape:
-		if session.IsTerminalStatus(view.SessionState) {
-			confirmPendingHighscore(view, s.statsManager())
-			return true, true
-		}
-		return false, true
+		return true
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if pending.ReplaceOnType {
 			pending.Input = ""
 			pending.ReplaceOnType = false
-			return false, true
+			return true
 		}
 		runes := []rune(pending.Input)
 		if len(runes) > 0 {
 			pending.Input = string(runes[:len(runes)-1])
 		}
-		return false, true
+		return true
 	case tcell.KeyDelete:
 		pending.Input = ""
 		pending.ReplaceOnType = false
-		return false, true
+		return true
 	case tcell.KeyCtrlU:
 		pending.Input = ""
 		pending.ReplaceOnType = false
-		return false, true
+		return true
 	case tcell.KeyRune:
 		r := event.Rune()
-		if r == 'q' || r == 'Q' {
-			if session.IsTerminalStatus(view.SessionState) {
-				confirmPendingHighscore(view, s.statsManager())
-				return true, true
-			}
-			return false, true
-		}
 		if r == 'r' || r == 'R' || r == 'p' || r == 'P' {
-			return false, true
+			return true
 		}
 		if r < ' ' || r == '\u007f' {
-			return false, true
+			return true
 		}
 		if pending.ReplaceOnType {
 			pending.Input = ""
 			pending.ReplaceOnType = false
 		}
 		pending.Input = NormalizePlayerName(pending.Input + string(r))
-		return false, true
+		return true
 	default:
-		return false, true
+		return true
 	}
 }
 
@@ -800,6 +763,22 @@ func (s Shell) syncFocus(view *viewState, now time.Time, force bool) (changed bo
 		view.Game.ClearPendingDirections()
 	}
 	return true, !nextFocusPause
+}
+
+func (s Shell) syncPanePause(view *viewState) {
+	if s.UpdatePanePause == nil {
+		return
+	}
+	paused := view.Pause.Active()
+	if view.PanePauseKnown && view.PanePaused == paused {
+		return
+	}
+	if err := s.UpdatePanePause(paused); err != nil {
+		view.Message = err.Error()
+		return
+	}
+	view.PanePauseKnown = true
+	view.PanePaused = paused
 }
 
 func (s Shell) syncCommandPreview(view *viewState) bool {
@@ -1283,12 +1262,12 @@ func drawCompletionDecisionPanel(screen tcell.Screen, view viewState, baseStyle 
 		resultSummary(view.State),
 		fmt.Sprintf("Current Score  %d", score),
 		"",
-		"C Continue     Q Quit",
+		"C Continue     F10 Shell",
 	}
 	if arena.RenderWidth() < 34 {
 		lines = []string{
 			fmt.Sprintf("COMMAND FINISHED - Score %d", score),
-			"C Continue  Q Quit",
+			"C Continue  F10",
 		}
 	}
 
@@ -1359,7 +1338,7 @@ func resultPanelLines(view viewState, maxWidth int) []string {
 	action := "R Restart     F9 Hide"
 	if view.Frozen {
 		title = "COMMAND FINISHED"
-		action = "Q Quit"
+		action = "F10 Shell"
 	}
 	if maxWidth < 34 {
 		lines := []string{
@@ -1546,18 +1525,18 @@ func pauseLine(pause PauseState) string {
 func statusLine(view viewState) string {
 	if view.PendingScore != nil {
 		if session.IsTerminalStatus(view.SessionState) {
-			return "New high score. Type name  Enter confirm  Q save+exit"
+			return "New high score. Type name  Enter confirm  F10 shell"
 		}
 		return "New high score. Type name  Enter confirm  F9 hide"
 	}
 	if view.Completion == CompletionUndecided {
-		return "Command finished  C continue  Q quit  F9 hide  F10 detach"
+		return "Command finished  C continue  F9 hide  F10 shell"
 	}
 	if view.Frozen {
-		return "Command finished  Q quit  F9 hide  F10 detach"
+		return "Command finished  F9 hide  F10 shell"
 	}
 	if view.Game != nil && view.Game.Over {
-		return "Round over  R restart  F9 hide  F10 detach"
+		return "Round over  R restart  F9 hide  F10 shell"
 	}
 	if view.Pause.Active() {
 		return pauseLine(view.Pause)
@@ -1569,9 +1548,9 @@ func statusLine(view viewState) string {
 		return questLine(view)
 	}
 	if view.Started {
-		return "Arrows/WASD move  P pause  F9 hide  F10 detach  F12 command"
+		return "Arrows/WASD move  P pause  F9 hide  F10 shell  F12 command"
 	}
-	return "Arrows/WASD start  F9 hide  F12 command  F10 detach"
+	return "Arrows/WASD start  F9 hide  F12 command  F10 shell"
 }
 
 func heatTransitionText(heat HeatLevel) string {

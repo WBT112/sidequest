@@ -28,8 +28,8 @@ sidequest \- play a tiny terminal game while waiting for a command
 runs a command in one tmux pane and opens a small terminal game in another.
 The game pane is focused first and starts on the first move. When the command
 finishes during a playable round, Sidequest pauses Snake and asks whether to
-continue the current round or quit. Quitting finalizes the score and shows the
-command state, exit code or signal, runtime, final score, and the local TOP 5.
+continue the current round. Finished-command screens show the command state,
+exit code or signal, runtime, current score, and the local TOP 5.
 .PP
 Snake uses Command Heat. Heat rises with accumulated active Snake playtime,
 speeds up Snake movement, increases the food score multiplier, and is capped at
@@ -151,18 +151,6 @@ only during active gameplay after the player continues.
 .TP
 .B R
 Restart Snake after a round over while the command is still running.
-.TP
-.B Q
-Finalize and quit after the wrapped command has reached a terminal state. During
-a playable round, the command-finished modal offers
-.B C
-to continue or
-.B Q
-to finalize. During a running command, use
-.B F9
-to hide Sidequest or
-.B F10
-to detach.
 .SH HIGHSCORES
 Sidequest keeps at most five scores per mode. Scores are sorted descending and
 equal scores keep deterministic insertion order. The result panel marks the

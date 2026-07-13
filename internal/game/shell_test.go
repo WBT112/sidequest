@@ -74,7 +74,7 @@ func TestRunSyncsScreenBeforeInitialRender(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
-func TestRunIgnoresActiveQForRunningCommand(t *testing.T) {
+func TestRunIgnoresQForRunningCommand(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(60, 12)
 	shell := Shell{
@@ -90,7 +90,7 @@ func TestRunIgnoresActiveQForRunningCommand(t *testing.T) {
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
 	select {
 	case err := <-errc:
-		t.Fatalf("Run returned after active Q: %v", err)
+		t.Fatalf("Run returned after q: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
 	cancelShell(t, cancel, errc)
@@ -99,11 +99,16 @@ func TestRunIgnoresActiveQForRunningCommand(t *testing.T) {
 func TestRunTogglesPause(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(60, 12)
+	pauseUpdates := make(chan bool, 4)
 
 	shell := Shell{
 		NewScreen: func() (tcell.Screen, error) { return screen, nil },
 		ReadState: func() (session.State, error) {
 			return session.State{Status: session.StatusRunning}, nil
+		},
+		UpdatePanePause: func(paused bool) error {
+			pauseUpdates <- paused
+			return nil
 		},
 		PollInterval: time.Hour,
 	}
@@ -111,8 +116,10 @@ func TestRunTogglesPause(t *testing.T) {
 	cancel, errc := runShellCancellable(shell)
 
 	waitForRenderedText(t, screen, "Command state: running")
+	assertPauseUpdate(t, pauseUpdates, false)
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone))
 	waitForRenderedText(t, screen, "PAUSED - PRESS P TO RESUME")
+	assertPauseUpdate(t, pauseUpdates, true)
 	cancelShell(t, cancel, errc)
 }
 
@@ -308,7 +315,7 @@ func TestStatusLineKeepsCompletionChoiceAboveQuestAndHeatMessages(t *testing.T) 
 
 	for _, test := range tests {
 		got := statusLine(test.view)
-		if !strings.Contains(got, "Command finished  C continue  Q quit") {
+		if !strings.Contains(got, "Command finished  C continue") || !strings.Contains(got, "F10 shell") {
 			t.Fatalf("%s statusLine = %q, want completion controls", test.name, got)
 		}
 		for _, unwanted := range []string{"QUEST:", "PICKUP:", "COMMAND HEAT"} {
@@ -365,48 +372,6 @@ func TestRenderCompactStatusLineKeepsCompletionPriority(t *testing.T) {
 	}
 }
 
-func TestRunUpdatesQuestStatsWhenCommandFinishIsQuit(t *testing.T) {
-	screen := tcell.NewSimulationScreen("")
-	screen.SetSize(80, 12)
-	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
-	started := now.Add(-time.Minute)
-	var finished atomic.Bool
-	statsDir := filepath.Join(t.TempDir(), "sidequest")
-	shell := Shell{
-		NewScreen: func() (tcell.Screen, error) { return screen, nil },
-		ReadState: func() (session.State, error) {
-			if finished.Load() {
-				return session.State{Status: session.StatusCompleted, StartedAt: &started, DurationMillis: int64Ptr(60_000), GameMode: GameModeQuest}, nil
-			}
-			return session.State{Status: session.StatusRunning, StartedAt: &started, GameMode: GameModeQuest}, nil
-		},
-		PollInterval: 20 * time.Millisecond,
-		GameInterval: time.Second,
-		StatsManager: StatsManager{
-			BaseDir: statsDir,
-		},
-		Now: func() time.Time { return now },
-	}
-
-	cancel, errc := runShellCancellable(shell)
-
-	waitForRenderedText(t, screen, "QUEST:")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
-	finished.Store(true)
-	waitForRenderedText(t, screen, "C Continue")
-	if _, err := os.Stat(filepath.Join(statsDir, statsFileName)); !os.IsNotExist(err) {
-		t.Fatalf("stats file exists before completion choice: %v", err)
-	}
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-	waitForRenderedText(t, screen, "NEW HIGH SCORE")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
-	waitForRenderedText(t, screen, "COMMAND FINISHED")
-	if _, err := os.Stat(filepath.Join(statsDir, statsFileName)); err != nil {
-		t.Fatalf("stats file was not written: %v", err)
-	}
-	cancelShell(t, cancel, errc)
-}
-
 func TestRunDoesNotWarnBeforeHeatRisesWithoutActivePlay(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(70, 12)
@@ -451,38 +416,6 @@ func TestRunFreezesCommandHeatWhenCommandAlreadyFinished(t *testing.T) {
 		t.Fatalf("finished command heat kept progressing:\n%s", screenText(screen))
 	}
 	cancelShell(t, cancel, errc)
-}
-
-func TestRunCallsTerminalQuitHookForFinishedCommand(t *testing.T) {
-	screen := tcell.NewSimulationScreen("")
-	screen.SetSize(40, 10)
-	terminalCalled := false
-	shell := Shell{
-		NewScreen: func() (tcell.Screen, error) { return screen, nil },
-		ReadState: func() (session.State, error) {
-			return session.State{Status: session.StatusCompleted}, nil
-		},
-		OnQuitTerminal: func() error {
-			terminalCalled = true
-			return nil
-		},
-		PollInterval: time.Hour,
-	}
-
-	errc := make(chan error, 1)
-	go func() {
-		errc <- shell.Run(context.Background())
-	}()
-
-	waitForRenderedText(t, screen, "Command finished  Q quit  F9 hide")
-	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if !terminalCalled {
-		t.Fatal("OnQuitTerminal was not called")
-	}
 }
 
 func TestRunWaitsForFirstMoveBeforeStartingSnake(t *testing.T) {
@@ -1057,8 +990,9 @@ func TestRunCommandCompletionDuringNameEntryKeepsPendingScore(t *testing.T) {
 	}
 
 	errc := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		errc <- shell.Run(context.Background())
+		errc <- shell.Run(ctx)
 	}()
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
@@ -1069,14 +1003,12 @@ func TestRunCommandCompletionDuringNameEntryKeepsPendingScore(t *testing.T) {
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'Z', tcell.ModNone))
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 	waitForRenderedText(t, screen, "COMMAND FINISHED")
-	waitForRenderedText(t, screen, "Q Quit")
+	waitForRenderedText(t, screen, "F10 Shell")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModNone))
 	waitForMissingRenderedText(t, screen, "Arrows/WASD start")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	waitForRenderedText(t, screen, "COMMAND FINISHED")
+	cancelShell(t, cancel, errc)
 	entries := (StatsManager{BaseDir: statsDir}).Leaderboard(GameModeClassic)
 	if len(entries) != 1 || entries[0].PlayerName != "Z" {
 		t.Fatalf("leaderboard = %#v, want saved pending score", entries)
@@ -1106,21 +1038,21 @@ func TestRunShowsCompletionChoiceWithinPollIntervalWhenCommandFinishes(t *testin
 	}
 
 	errc := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		errc <- shell.Run(context.Background())
+		errc <- shell.Run(ctx)
 	}()
 
-	waitForRenderedText(t, screen, "Command finished  C continue  Q quit")
+	waitForRenderedText(t, screen, "Command finished  C continue")
+	waitForRenderedText(t, screen, "F10 shell")
 	waitForRenderedText(t, screen, "COMMAND FINISHED")
 	waitForRenderedText(t, screen, "C Continue")
 	waitForMissingRenderedText(t, screen, "FINAL SCORE")
 	waitForRenderedText(t, screen, "Exit code: 0")
 	waitForRenderedText(t, screen, "Runtime: 00:00:03")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	waitForRenderedText(t, screen, "COMMAND FINISHED")
+	cancelShell(t, cancel, errc)
 }
 
 func TestRunDoesNotPersistZeroScoreWhenCommandFailsImmediately(t *testing.T) {
@@ -1145,8 +1077,9 @@ func TestRunDoesNotPersistZeroScoreWhenCommandFailsImmediately(t *testing.T) {
 	}
 
 	errc := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		errc <- shell.Run(context.Background())
+		errc <- shell.Run(ctx)
 	}()
 
 	waitForRenderedText(t, screen, "Arrows/WASD start")
@@ -1156,10 +1089,8 @@ func TestRunDoesNotPersistZeroScoreWhenCommandFailsImmediately(t *testing.T) {
 	waitForRenderedText(t, screen, "COMMAND FINISHED")
 	waitForMissingRenderedText(t, screen, "NEW HIGH SCORE")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	waitForRenderedText(t, screen, "COMMAND FINISHED")
+	cancelShell(t, cancel, errc)
 	if entries := (StatsManager{BaseDir: statsDir}).Leaderboard(GameModeClassic); len(entries) != 0 {
 		t.Fatalf("classic leaderboard = %#v, want empty", entries)
 	}
@@ -1187,8 +1118,9 @@ func TestRunDoesNotUpdateQuestStatsWhenCommandFailsImmediately(t *testing.T) {
 	}
 
 	errc := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		errc <- shell.Run(context.Background())
+		errc <- shell.Run(ctx)
 	}()
 
 	waitForRenderedText(t, screen, "QUEST:")
@@ -1197,10 +1129,8 @@ func TestRunDoesNotUpdateQuestStatsWhenCommandFailsImmediately(t *testing.T) {
 	waitForRenderedText(t, screen, "Command state: failed")
 	waitForMissingRenderedText(t, screen, "NEW HIGH SCORE")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone))
-
-	if err := <-errc; err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
+	waitForRenderedText(t, screen, "Command state: failed")
+	cancelShell(t, cancel, errc)
 	if _, err := os.Stat(filepath.Join(statsDir, statsFileName)); !os.IsNotExist(err) {
 		t.Fatalf("stats file exists after immediate command failure: %v", err)
 	}
@@ -1373,7 +1303,7 @@ func TestRenderDrawsMonochromeQuestObjectsAndResultPanel(t *testing.T) {
 	render(screen, view)
 
 	text = screenText(screen)
-	for _, want := range []string{"COMMAND FINISHED", "C Continue", "Q Quit"} {
+	for _, want := range []string{"COMMAND FINISHED", "C Continue", "F10 Shell"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("monochrome completion render missing %q:\n%s", want, text)
 		}
@@ -1535,6 +1465,18 @@ func screenRowText(screen tcell.SimulationScreen, row int) string {
 		builder.WriteRune(main)
 	}
 	return builder.String()
+}
+
+func assertPauseUpdate(t *testing.T, updates <-chan bool, want bool) {
+	t.Helper()
+	select {
+	case got := <-updates:
+		if got != want {
+			t.Fatalf("pause update = %t, want %t", got, want)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("pause update timed out, want %t", want)
+	}
 }
 
 func int64Ptr(value int64) *int64 {

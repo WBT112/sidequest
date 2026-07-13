@@ -208,11 +208,7 @@ func (g *SnakeGame) step(forceGrow bool) StepResult {
 		return StepMoved
 	}
 
-	if len(g.PendingDirs) > 0 {
-		g.Dir = g.PendingDirs[0]
-		copy(g.PendingDirs, g.PendingDirs[1:])
-		g.PendingDirs = g.PendingDirs[:len(g.PendingDirs)-1]
-	}
+	g.applyNextDirection(forceGrow)
 
 	head := g.Snake[0]
 	next := Point{X: head.X + directionDelta(g.Dir).X, Y: head.Y + directionDelta(g.Dir).Y}
@@ -242,6 +238,49 @@ func (g *SnakeGame) step(forceGrow bool) StepResult {
 
 	g.Snake = g.Snake[:len(g.Snake)-1]
 	g.placeFoodIfInvalid()
+	return StepMoved
+}
+
+func (g *SnakeGame) applyNextDirection(forceGrow bool) {
+	if len(g.PendingDirs) == 0 {
+		return
+	}
+	nextDirection := g.PendingDirs[0]
+	if g.shouldDiscardUnsafeSideTurn(nextDirection, forceGrow) {
+		g.discardFirstPendingDirection()
+		return
+	}
+	g.Dir = nextDirection
+	g.discardFirstPendingDirection()
+}
+
+func (g *SnakeGame) discardFirstPendingDirection() {
+	copy(g.PendingDirs, g.PendingDirs[1:])
+	g.PendingDirs = g.PendingDirs[:len(g.PendingDirs)-1]
+}
+
+func (g *SnakeGame) shouldDiscardUnsafeSideTurn(direction Direction, forceGrow bool) bool {
+	if direction == g.Dir || oppositeDirections(g.Dir, direction) {
+		return false
+	}
+	turnCollision := g.collisionForDirection(direction, forceGrow)
+	if turnCollision != StepHitSelf {
+		return false
+	}
+	return g.collisionForDirection(g.Dir, forceGrow) == StepMoved
+}
+
+func (g *SnakeGame) collisionForDirection(direction Direction, forceGrow bool) StepResult {
+	head := g.Snake[0]
+	delta := directionDelta(direction)
+	next := Point{X: head.X + delta.X, Y: head.Y + delta.Y}
+	if next.X < 0 || next.X >= g.Width || next.Y < 0 || next.Y >= g.Height {
+		return StepHitWall
+	}
+	willGrow := forceGrow || next == g.Food
+	if g.collidesWithSnake(next, willGrow) {
+		return StepHitSelf
+	}
 	return StepMoved
 }
 
