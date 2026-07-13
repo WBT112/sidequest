@@ -96,6 +96,7 @@ type viewState struct {
 	Frozen          bool
 	Message         string
 	Started         bool
+	NoColor         bool
 	Game            *SnakeGame
 	CommandHeat     HeatLevel
 	FrozenHeat      HeatLevel
@@ -182,6 +183,7 @@ func (s Shell) Run(ctx context.Context) error {
 		State:        state,
 		SessionState: state.Status,
 		Frozen:       terminalState(state.Status),
+		NoColor:      state.NoColor,
 		Game:         game,
 		RoundStarted: gameEpoch,
 		RoundHeat:    1,
@@ -388,6 +390,7 @@ func (s Shell) Run(ctx context.Context) error {
 			state = mergeTerminalState(view.State, state)
 			view.State = state
 			view.SessionState = state.Status
+			view.NoColor = state.NoColor
 			if session.IsTerminalStatus(state.Status) {
 				now := s.now()
 				if view.Completion != CompletionContinue {
@@ -789,14 +792,14 @@ func render(screen tcell.Screen, view viewState) {
 		return
 	}
 
-	style := tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
-	titleStyle := style.Bold(true).Foreground(tcell.ColorAqua)
-	statusStyle := style.Foreground(statusColor(view.SessionState))
-	secondaryStyle := style.Foreground(tcell.ColorGray)
-	scoreStyle := style.Foreground(tcell.ColorGreen)
+	style := baseRenderStyle(view.NoColor)
+	titleStyle := colorStyle(style.Bold(true), view.NoColor, tcell.ColorAqua, tcell.ColorDefault)
+	statusStyle := colorStyle(style, view.NoColor, statusColor(view.SessionState), tcell.ColorDefault)
+	secondaryStyle := colorStyle(style, view.NoColor, tcell.ColorGray, tcell.ColorDefault)
+	scoreStyle := colorStyle(style, view.NoColor, tcell.ColorGreen, tcell.ColorDefault)
 
 	drawBox(screen, 0, 0, width, height, style)
-	drawPlayfield(screen, style)
+	drawPlayfield(screen, style, view.NoColor)
 
 	lines := []renderLine{
 		{y: 0, text: "Sidequest Snake [" + gameModeLabel(view) + "]", style: titleStyle, centered: true},
@@ -815,9 +818,9 @@ func render(screen tcell.Screen, view viewState) {
 		lines = append(lines, renderLine{y: y, text: view.Message, style: secondaryStyle})
 	}
 
-	drawSnake(screen, view.Game, style)
-	drawGoldenByte(screen, view.Quest, style)
-	drawPickup(screen, view.Quest, style)
+	drawSnake(screen, view.Game, style, view.NoColor)
+	drawGoldenByte(screen, view.Quest, style, view.NoColor)
+	drawPickup(screen, view.Quest, style, view.NoColor)
 	drawResultPanel(screen, view, style)
 	drawCompletionDecisionPanel(screen, view, style)
 	drawResizePausePanel(screen, view, style)
@@ -840,6 +843,26 @@ type renderLine struct {
 	centered bool
 }
 
+func baseRenderStyle(noColor bool) tcell.Style {
+	if noColor {
+		return tcell.StyleDefault
+	}
+	return tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
+}
+
+func colorStyle(style tcell.Style, noColor bool, foreground tcell.Color, background tcell.Color) tcell.Style {
+	if noColor {
+		return style
+	}
+	if foreground != tcell.ColorDefault {
+		style = style.Foreground(foreground)
+	}
+	if background != tcell.ColorDefault {
+		style = style.Background(background)
+	}
+	return style
+}
+
 func newSnakeGameForScreen(screen tcell.Screen) *SnakeGame {
 	width, height := boardSize(screen)
 	return NewSnakeGame(width, height, nil)
@@ -860,7 +883,7 @@ func arenaForScreen(screen tcell.Screen) Arena {
 	return ArenaForScreen(width, height)
 }
 
-func drawPlayfield(screen tcell.Screen, style tcell.Style) {
+func drawPlayfield(screen tcell.Screen, style tcell.Style, noColor bool) {
 	width, height := screen.Size()
 	arena := arenaForScreen(screen)
 	topWallY := arena.Y - 1
@@ -871,8 +894,8 @@ func drawPlayfield(screen tcell.Screen, style tcell.Style) {
 		return
 	}
 
-	boardStyle := style.Background(tcell.ColorDarkSlateGray)
-	wallStyle := style.Foreground(tcell.ColorTeal).Background(tcell.ColorTeal).Bold(true)
+	boardStyle := colorStyle(style, noColor, tcell.ColorDefault, tcell.ColorDarkSlateGray)
+	wallStyle := colorStyle(style.Bold(true), noColor, tcell.ColorTeal, tcell.ColorTeal)
 
 	for y := arena.Y; y < arena.Y+arena.Height; y++ {
 		for x := arena.X; x < arena.X+arena.RenderWidth(); x++ {
@@ -889,16 +912,16 @@ func drawPlayfield(screen tcell.Screen, style tcell.Style) {
 	}
 }
 
-func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
+func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style, noColor bool) {
 	if game == nil {
 		return
 	}
 
 	arena := arenaForScreen(screen)
 	boardBackground := tcell.ColorDarkSlateGray
-	foodStyle := baseStyle.Foreground(tcell.ColorYellow).Background(boardBackground).Bold(true)
-	bodyStyle := baseStyle.Foreground(tcell.ColorLimeGreen).Background(boardBackground).Bold(true)
-	tailStyle := baseStyle.Foreground(tcell.ColorGreen).Background(boardBackground)
+	foodStyle := colorStyle(baseStyle.Bold(true), noColor, tcell.ColorYellow, boardBackground)
+	bodyStyle := colorStyle(baseStyle.Bold(true), noColor, tcell.ColorLimeGreen, boardBackground)
+	tailStyle := colorStyle(baseStyle, noColor, tcell.ColorGreen, boardBackground)
 	headStyle := bodyStyle.Bold(true)
 
 	if game.Food.X >= 0 && game.Food.X < arena.Width && game.Food.Y >= 0 && game.Food.Y < arena.Height {
@@ -922,7 +945,7 @@ func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
 	}
 }
 
-func drawGoldenByte(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style) {
+func drawGoldenByte(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style, noColor bool) {
 	if !quest.Enabled() || !quest.Golden.Active {
 		return
 	}
@@ -931,11 +954,11 @@ func drawGoldenByte(screen tcell.Screen, quest *QuestState, baseStyle tcell.Styl
 	if point.X < 0 || point.X >= arena.Width || point.Y < 0 || point.Y >= arena.Height {
 		return
 	}
-	style := baseStyle.Foreground(tcell.ColorOrange).Background(tcell.ColorDarkSlateGray).Bold(true)
+	style := colorStyle(baseStyle.Bold(true), noColor, tcell.ColorOrange, tcell.ColorDarkSlateGray)
 	drawCell(screen, arena, point, "<>", style)
 }
 
-func drawPickup(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style) {
+func drawPickup(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style, noColor bool) {
 	if !quest.Enabled() || !quest.Pickup.Active {
 		return
 	}
@@ -944,11 +967,14 @@ func drawPickup(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style) {
 	if point.X < 0 || point.X >= arena.Width || point.Y < 0 || point.Y >= arena.Height {
 		return
 	}
-	style := pickupStyle(baseStyle, quest.Pickup.Upgrade)
+	style := pickupStyle(baseStyle, quest.Pickup.Upgrade, noColor)
 	drawCell(screen, arena, point, PickupSymbol(quest.Pickup.Upgrade), style)
 }
 
-func pickupStyle(baseStyle tcell.Style, upgrade Upgrade) tcell.Style {
+func pickupStyle(baseStyle tcell.Style, upgrade Upgrade, noColor bool) tcell.Style {
+	if noColor {
+		return baseStyle.Bold(true)
+	}
 	background := tcell.ColorDarkSlateGray
 	switch upgrade {
 	case UpgradeShield:
@@ -1025,8 +1051,8 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 	panelX := arena.X + (arena.RenderWidth()-panelWidth)/2
 	panelY := arena.Y + (arena.Height-panelHeight)/2
 
-	panelStyle := baseStyle.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
-	borderStyle := baseStyle.Foreground(accent).Background(tcell.ColorBlack).Bold(true)
+	panelStyle := colorStyle(baseStyle, view.NoColor, tcell.ColorWhite, tcell.ColorBlack)
+	borderStyle := colorStyle(baseStyle.Bold(true), view.NoColor, accent, tcell.ColorBlack)
 	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
 	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
 
@@ -1064,8 +1090,8 @@ func drawResizePausePanel(screen tcell.Screen, view viewState, baseStyle tcell.S
 	panelX := arena.X + (arena.RenderWidth()-panelWidth)/2
 	panelY := arena.Y + (arena.Height-panelHeight)/2
 
-	panelStyle := baseStyle.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
-	borderStyle := baseStyle.Foreground(tcell.ColorYellow).Background(tcell.ColorBlack).Bold(true)
+	panelStyle := colorStyle(baseStyle, view.NoColor, tcell.ColorWhite, tcell.ColorBlack)
+	borderStyle := colorStyle(baseStyle.Bold(true), view.NoColor, tcell.ColorYellow, tcell.ColorBlack)
 	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
 	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
 	for index, line := range lines {
@@ -1112,9 +1138,9 @@ func drawCompletionDecisionPanel(screen tcell.Screen, view viewState, baseStyle 
 	panelX := arena.X + (arena.RenderWidth()-panelWidth)/2
 	panelY := arena.Y + (arena.Height-panelHeight)/2
 
-	panelStyle := baseStyle.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
-	borderStyle := baseStyle.Foreground(tcell.ColorAqua).Background(tcell.ColorBlack).Bold(true)
-	actionStyle := baseStyle.Foreground(tcell.ColorYellow).Background(tcell.ColorBlack).Bold(true)
+	panelStyle := colorStyle(baseStyle, view.NoColor, tcell.ColorWhite, tcell.ColorBlack)
+	borderStyle := colorStyle(baseStyle.Bold(true), view.NoColor, tcell.ColorAqua, tcell.ColorBlack)
+	actionStyle := colorStyle(baseStyle.Bold(true), view.NoColor, tcell.ColorYellow, tcell.ColorBlack)
 	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
 	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
 	for index, line := range lines {

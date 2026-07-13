@@ -60,6 +60,31 @@ func TestParseNoHistoryBeforeSeparator(t *testing.T) {
 	}
 }
 
+func TestParseNoColorBeforeSeparator(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	result, err := Parse([]string{"--no-color", "--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !result.Config.NoColor {
+		t.Fatal("NoColor = false, want true")
+	}
+	if result.Config.Executable != "sleep" {
+		t.Fatalf("Executable = %q, want sleep", result.Config.Executable)
+	}
+}
+
+func TestParseNoColorFromEnvironment(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	result, err := Parse([]string{"--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !result.Config.NoColor {
+		t.Fatal("NoColor = false, want true from NO_COLOR")
+	}
+}
+
 func TestParseRejectsUnknownMode(t *testing.T) {
 	_, err := Parse([]string{"--mode", "arena", "--", "true"})
 	if err == nil || !strings.Contains(err.Error(), "unknown mode") {
@@ -135,7 +160,7 @@ func TestRunHelpDocumentsSeparator(t *testing.T) {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
 
-	for _, want := range []string{"sidequest [options] -- <command> [arguments...]", "--no-history"} {
+	for _, want := range []string{"sidequest [options] -- <command> [arguments...]", "--no-history", "--no-color"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help output missing %q:\n%s", want, out.String())
 		}
@@ -165,6 +190,37 @@ func TestRunCommandStoresNoHistoryChoice(t *testing.T) {
 	}
 
 	code := app.Run([]string{"--no-history", "--", "true"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+}
+
+func TestRunCommandStoresNoColorChoice(t *testing.T) {
+	var out bytes.Buffer
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("no-color")}
+	app := App{
+		Out:       &out,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			return manager.Create()
+		},
+		RunLayout: func(gotSession session.Session, gotCommand session.Command) error {
+			state, err := session.ReadState(gotSession)
+			if err != nil {
+				t.Fatalf("ReadState returned error: %v", err)
+			}
+			if !state.NoColor {
+				t.Fatal("NoColor = false, want true")
+			}
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"--no-color", "--", "true"})
 	if code != 0 {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}

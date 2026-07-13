@@ -55,6 +55,7 @@ type State struct {
 	TmuxSocket     string     `json:"tmux_socket,omitempty"`
 	GameMode       string     `json:"game_mode,omitempty"`
 	NoHistory      bool       `json:"no_history,omitempty"`
+	NoColor        bool       `json:"no_color,omitempty"`
 }
 
 type Manager struct {

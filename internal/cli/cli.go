@@ -35,6 +35,7 @@ Options:
   -v, --version    Show the sidequest version.
   --mode <mode>    Select game mode: classic or quest.
   --no-history     Do not persist command-pane output after the run.
+  --no-color       Disable Sidequest game/UI colors.
 
 The -- separator marks the end of Sidequest options and the start of the
 command to run. Command arguments are preserved exactly and are not passed
@@ -51,6 +52,7 @@ type Config struct {
 	Arguments  []string
 	Mode       string
 	NoHistory  bool
+	NoColor    bool
 }
 
 type Result struct {
@@ -197,6 +199,7 @@ func (a App) Run(args []string) int {
 			if err := session.UpdateState(runtimeSession, a.now(), func(state *session.State) {
 				state.GameMode = result.Config.Mode
 				state.NoHistory = result.Config.NoHistory
+				state.NoColor = result.Config.NoColor
 			}); err != nil {
 				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
 				return 2
@@ -219,6 +222,7 @@ func Parse(args []string) (Result, error) {
 
 	mode := game.GameModeClassic
 	noHistory := false
+	noColor := os.Getenv("NO_COLOR") != ""
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		switch arg {
@@ -238,8 +242,10 @@ func Parse(args []string) (Result, error) {
 			index++
 		case "--no-history":
 			noHistory = true
+		case "--no-color":
+			noColor = true
 		case "--":
-			return parseCommand(args[index+1:], mode, noHistory)
+			return parseCommand(args[index+1:], mode, noHistory, noColor)
 		default:
 			if strings.HasPrefix(arg, "--mode=") {
 				selectedMode, err := parseMode(strings.TrimPrefix(arg, "--mode="))
@@ -271,7 +277,7 @@ func Usage() string {
 	return usage
 }
 
-func parseCommand(args []string, mode string, noHistory bool) (Result, error) {
+func parseCommand(args []string, mode string, noHistory bool, noColor bool) (Result, error) {
 	if len(args) == 0 || args[0] == "" {
 		return Result{}, ErrMissingCommand
 	}
@@ -282,6 +288,7 @@ func parseCommand(args []string, mode string, noHistory bool) (Result, error) {
 			Arguments:  append([]string(nil), args[1:]...),
 			Mode:       mode,
 			NoHistory:  noHistory,
+			NoColor:    noColor,
 		},
 	}, nil
 }

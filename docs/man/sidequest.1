@@ -85,6 +85,12 @@ bonuses and local game statistics.
 Do not capture or persist command-pane output when the Sidequest session is
 closed. No stored run metadata or output file is created for that run. The live
 tmux pane scrollback remains visible until the session is closed.
+.TP
+.B \-\-no-color
+Disable colors in Sidequest's own game and UI rendering. The wrapped command's
+output is not modified. A non-empty
+.B NO_COLOR
+environment variable enables the same behavior.
 .SH COMMANDS
 .TP
 .B list

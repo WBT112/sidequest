@@ -1047,6 +1047,105 @@ func TestRunDrawsColoredPlayfieldWithThickWalls(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
+func TestRunDrawsMonochromeClassicWithoutColors(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.SetSize(40, 12)
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning, NoColor: true}, nil
+		},
+		PollInterval: time.Hour,
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "MODE classic")
+	topWall, _, topStyle, _ := screen.GetContent(20, 4)
+	sideWall, _, _, _ := screen.GetContent(0, 6)
+	inside, _, insideStyle, _ := screen.GetContent(20, 6)
+	_, wallBackground, _ := topStyle.Decompose()
+	_, insideBackground, _ := insideStyle.Decompose()
+	if topWall != tcell.RuneBlock || sideWall != tcell.RuneBlock {
+		t.Fatalf("wall runes = %q %q, want block walls", topWall, sideWall)
+	}
+	if wallBackground != tcell.ColorDefault {
+		t.Fatalf("wall background = %v, want default", wallBackground)
+	}
+	if inside != ' ' || insideBackground != tcell.ColorDefault {
+		t.Fatalf("inside cell = %q background=%v, want monochrome playfield", inside, insideBackground)
+	}
+	assertScreenHasNoColors(t, screen)
+
+	cancelShell(t, cancel, errc)
+}
+
+func TestRenderDrawsMonochromeQuestObjectsAndResultPanel(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("screen.Init returned error: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(80, 24)
+
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(20, 12, func(int) int { return 0 })
+	game.Snake = []Point{{X: 3, Y: 3}, {X: 2, Y: 3}}
+	game.Food = Point{X: 8, Y: 5}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 20, 12)
+	quest.Mission = Mission{ID: MissionFood15, Label: "Collect 15 food", Target: 15}
+	quest.MissionProgress = 4
+	quest.Golden = GoldenByte{Position: Point{X: 10, Y: 5}, Active: true}
+	quest.Pickup = UpgradePickup{Upgrade: UpgradeDoubleScore, Position: Point{X: 12, Y: 5}, Active: true}
+	view := viewState{
+		State:        session.State{Status: session.StatusRunning, NoColor: true},
+		SessionState: session.StatusRunning,
+		NoColor:      true,
+		Game:         game,
+		Quest:        quest,
+		Heat:         HeatByLevel(1),
+		GameTime:     now,
+	}
+
+	render(screen, view)
+
+	text := screenText(screen)
+	for _, want := range []string{"QUEST: Collect 15 food 4/15", "()", "<>", "x2"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("monochrome quest render missing %q:\n%s", want, text)
+		}
+	}
+	assertScreenHasNoColors(t, screen)
+
+	view.Completion = CompletionUndecided
+	render(screen, view)
+
+	text = screenText(screen)
+	for _, want := range []string{"COMMAND FINISHED", "C Continue", "Q Quit"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("monochrome completion render missing %q:\n%s", want, text)
+		}
+	}
+	assertScreenHasNoColors(t, screen)
+
+	game.Over = true
+	view.Completion = CompletionNone
+	view.ResultScore = 920
+	view.RoundFinalized = true
+	view.Leaderboard = []LeaderboardEntry{{Score: 920, PlayerName: "YOU"}}
+	view.CurrentRank = 1
+	render(screen, view)
+
+	text = screenText(screen)
+	for _, want := range []string{"GAME OVER", "FINAL SCORE  920", "TOP 5", "<- YOU"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("monochrome result render missing %q:\n%s", want, text)
+		}
+	}
+	assertScreenHasNoColors(t, screen)
+}
+
 func TestTerminalState(t *testing.T) {
 	for _, state := range []string{session.StatusCompleted, session.StatusFailed, session.StatusInterrupted, session.StatusStartFailed} {
 		if !terminalState(state) {
@@ -1217,6 +1316,20 @@ func screenText(screen tcell.SimulationScreen) string {
 		builder.WriteByte('\n')
 	}
 	return builder.String()
+}
+
+func assertScreenHasNoColors(t *testing.T, screen tcell.SimulationScreen) {
+	t.Helper()
+	width, height := screen.Size()
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			main, _, style, _ := screen.GetContent(x, y)
+			foreground, background, _ := style.Decompose()
+			if foreground != tcell.ColorDefault || background != tcell.ColorDefault {
+				t.Fatalf("cell (%d,%d) %q has foreground=%v background=%v, want defaults", x, y, main, foreground, background)
+			}
+		}
+	}
 }
 
 func rowTextIndex(screen tcell.SimulationScreen, row int, text string) int {

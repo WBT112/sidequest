@@ -138,6 +138,7 @@ export PATH="$HOME/.local/bin:$PATH"
 sidequest -- ssh deploy@example.com
 sidequest -- sh -c 'sudo du -xh /var /usr /home 2>/dev/null | sort -h'
 sidequest --no-history -- ssh production.example.com
+sidequest --no-color -- make test
 sidequest --mode quest -- make test
 sidequest -- codex
 sidequest -- claude "Run the test suite, fix any failures, and summarize the changes."
@@ -169,6 +170,9 @@ Heat stays frozen at the reached level while the round can continue.
 
 Quest mode adds combo scoring, one mission per command, Golden Bytes, random
 arena pickups and other stuff.
+
+Use `--no-color` or a non-empty `NO_COLOR` environment variable for monochrome
+Sidequest game/UI rendering. Wrapped command output is left untouched.
 
 For complete controls and behavior details, use:
 
