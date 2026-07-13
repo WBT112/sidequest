@@ -436,8 +436,13 @@ func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time)
 		return result
 	}
 	if quest.Enabled() && quest.Golden.Active && game.NextPoint() == quest.Golden.Position {
+		extraOccupied := []Point{game.Food}
+		if quest.Pickup.Active {
+			extraOccupied = append(extraOccupied, quest.Pickup.Position)
+		}
 		result := game.StepGrow()
 		if result == StepAteFood {
+			game.GrowTail(1, extraOccupied)
 			quest.OnGoldenByte(game, heat, now)
 			quest.EnsureFood(game)
 		}

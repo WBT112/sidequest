@@ -129,12 +129,18 @@ func (g *SnakeGame) Recover() {
 	score := g.Score
 	foodScore := g.FoodScore
 	foodHeat := g.FoodHeat
+	length := len(g.Snake)
 	randomInt := g.randomInt
 	*g = *NewSnakeGame(g.Width, g.Height, randomInt)
+	if snake, ok := reflowedSnake(g.Snake[0], length, g.Width, g.Height); ok {
+		g.Snake = snake
+		g.Dir = safeDirection(g.Dir, g.Snake, g.Width, g.Height)
+	}
 	g.Score = score
 	g.FoodScore = foodScore
 	g.FoodHeat = foodHeat
 	g.Over = false
+	g.placeFoodIfInvalid()
 }
 
 func (g *SnakeGame) ChangeDirection(direction Direction) bool {
@@ -162,6 +168,39 @@ func (g *SnakeGame) Step() StepResult {
 
 func (g *SnakeGame) StepGrow() StepResult {
 	return g.step(true)
+}
+
+func (g *SnakeGame) GrowTail(cells int, extraOccupied []Point) int {
+	if cells <= 0 || len(g.Snake) == 0 {
+		return 0
+	}
+	occupied := make(map[Point]bool, len(g.Snake)+len(extraOccupied))
+	for _, point := range g.Snake {
+		occupied[point] = true
+	}
+	for _, point := range extraOccupied {
+		occupied[point] = true
+	}
+
+	grown := 0
+	for grown < cells {
+		candidates := tailGrowthCandidates(g.Snake)
+		appended := false
+		for _, candidate := range candidates {
+			if candidate.X < 0 || candidate.X >= g.Width || candidate.Y < 0 || candidate.Y >= g.Height || occupied[candidate] {
+				continue
+			}
+			g.Snake = append(g.Snake, candidate)
+			occupied[candidate] = true
+			grown++
+			appended = true
+			break
+		}
+		if !appended {
+			return grown
+		}
+	}
+	return grown
 }
 
 func (g *SnakeGame) step(forceGrow bool) StepResult {
@@ -315,10 +354,29 @@ func (g *SnakeGame) WarpToFreePoint(random RandomSource, extraOccupied []Point) 
 	if !ok {
 		return false
 	}
-	g.Snake = []Point{point}
+	snake, ok := reflowedSnakeAvoiding(point, len(g.Snake), g.Width, g.Height, extraOccupied)
+	if !ok {
+		return false
+	}
+	g.Snake = snake
+	g.Dir = safeDirection(g.Dir, g.Snake, g.Width, g.Height)
 	g.PendingDirs = nil
 	g.Over = false
 	return true
+}
+
+func tailGrowthCandidates(snake []Point) []Point {
+	tail := snake[len(snake)-1]
+	candidates := make([]Point, 0, 5)
+	if len(snake) > 1 {
+		beforeTail := snake[len(snake)-2]
+		candidates = append(candidates, Point{X: tail.X + tail.X - beforeTail.X, Y: tail.Y + tail.Y - beforeTail.Y})
+	}
+	for _, direction := range []Direction{DirectionRight, DirectionDown, DirectionLeft, DirectionUp} {
+		delta := directionDelta(direction)
+		candidates = append(candidates, Point{X: tail.X + delta.X, Y: tail.Y + delta.Y})
+	}
+	return candidates
 }
 
 func (g *SnakeGame) collidesWithSnake(point Point, willGrow bool) bool {
@@ -424,6 +482,42 @@ func reflowedSnake(preferredHead Point, length int, width int, height int) ([]Po
 		}
 	}
 	return nil, false
+}
+
+func reflowedSnakeAvoiding(preferredHead Point, length int, width int, height int, blocked []Point) ([]Point, bool) {
+	blockedCells := make(map[Point]bool, len(blocked))
+	for _, point := range blocked {
+		blockedCells[point] = true
+	}
+	if length <= 0 || width*height-len(blockedCells) < length || blockedCells[clampPoint(preferredHead, width, height)] {
+		return nil, false
+	}
+	head := clampPoint(preferredHead, width, height)
+	for _, path := range serpentinePaths(width, height) {
+		if snake, ok := slicePathFromHead(path, head, length); ok && !snakeTouchesBlocked(snake, blockedCells) {
+			return snake, true
+		}
+	}
+	for _, path := range serpentinePaths(width, height) {
+		if len(path) >= length {
+			for start := 0; start+length <= len(path); start++ {
+				snake := append([]Point(nil), path[start:start+length]...)
+				if !snakeTouchesBlocked(snake, blockedCells) {
+					return snake, true
+				}
+			}
+		}
+	}
+	return nil, false
+}
+
+func snakeTouchesBlocked(snake []Point, blocked map[Point]bool) bool {
+	for _, point := range snake {
+		if blocked[point] {
+			return true
+		}
+	}
+	return false
 }
 
 func serpentinePaths(width int, height int) [][]Point {

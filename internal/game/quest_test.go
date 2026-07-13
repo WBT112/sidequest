@@ -25,15 +25,30 @@ func TestQuestComboScoresWithHeatAndExpires(t *testing.T) {
 	}
 }
 
+func TestQuestComboDurationScalesWithCombo(t *testing.T) {
+	if got := comboDuration(1); got >= comboWindow {
+		t.Fatalf("comboDuration(1) = %s, want faster than %s", got, comboWindow)
+	}
+	if got := comboDuration(4); got != comboWindow {
+		t.Fatalf("comboDuration(4) = %s, want baseline %s", got, comboWindow)
+	}
+	if got := comboDuration(8); got <= comboWindow {
+		t.Fatalf("comboDuration(8) = %s, want slower than %s", got, comboWindow)
+	}
+	if got := comboDuration(20); got != maxComboWindow {
+		t.Fatalf("comboDuration(20) = %s, want cap %s", got, maxComboWindow)
+	}
+}
+
 func TestQuestGoldenByteSpawnCollectAndFullBoard(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(4, 4, func(int) int { return 0 })
 	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 4, 4)
-	for i := 0; i < 7; i++ {
+	for i := 0; i < goldenSpawnMin; i++ {
 		quest.OnNormalFood(game, HeatByLevel(1), now.Add(time.Duration(i)*time.Second))
 	}
 	if !quest.Golden.Active {
-		t.Fatal("golden byte did not spawn after seventh food")
+		t.Fatal("golden byte did not spawn after minimum food target")
 	}
 	if quest.Golden.Position == game.Food {
 		t.Fatalf("golden byte spawned on normal food at %#v", quest.Golden.Position)
@@ -47,7 +62,7 @@ func TestQuestGoldenByteSpawnCollectAndFullBoard(t *testing.T) {
 	if quest.Golden.Active {
 		t.Fatal("golden byte remained active after timeout")
 	}
-	for i := 0; i < 7; i++ {
+	for i := 0; i < goldenSpawnMin; i++ {
 		quest.OnNormalFood(game, HeatByLevel(1), now.Add(time.Duration(20+i)*time.Second))
 	}
 	quest.OnGoldenByte(game, HeatByLevel(1), now.Add(8*time.Second))
@@ -59,7 +74,7 @@ func TestQuestGoldenByteSpawnCollectAndFullBoard(t *testing.T) {
 	full.Snake = []Point{{X: 0, Y: 0}}
 	full.Food = Point{X: -1, Y: -1}
 	quest = NewQuestState(GameModeQuest, now, fixedRandom(0), 1, 1)
-	for i := 0; i < 7; i++ {
+	for i := 0; i < goldenSpawnMin; i++ {
 		quest.OnNormalFood(full, HeatByLevel(1), now)
 	}
 	if quest.Golden.Active {
@@ -72,8 +87,10 @@ func TestQuestGoldenByteUsesInjectedRandomSequence(t *testing.T) {
 	game := NewSnakeGame(4, 4, func(int) int { return 0 })
 	game.Snake = []Point{{X: 1, Y: 1}, {X: 1, Y: 2}}
 	game.Food = Point{X: 0, Y: 0}
-	random := &sequenceRandom{values: []int{0, 0, 1}}
+	random := &sequenceRandom{values: []int{0, 0, 0, 2}}
 	quest := NewQuestState(GameModeQuest, now, random, 4, 4)
+	quest.NextPickupFood = 100
+	quest.NextGoldenFood = 7
 
 	quest.NormalFood = 6
 	quest.OnNormalFood(game, HeatByLevel(1), now)
@@ -83,6 +100,7 @@ func TestQuestGoldenByteUsesInjectedRandomSequence(t *testing.T) {
 	first := quest.Golden.Position
 
 	quest.Golden.Active = false
+	quest.NextGoldenFood = 14
 	quest.NormalFood = 13
 	quest.OnNormalFood(game, HeatByLevel(1), now.Add(time.Second))
 	if !quest.Golden.Active {
@@ -123,22 +141,38 @@ func TestQuestMissionSelectionHonorsInjectedIndex(t *testing.T) {
 	}
 }
 
-func TestQuestPickupSpawnsOnFifthNormalFood(t *testing.T) {
+func TestQuestPickupSpawnsOnRandomFoodTarget(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(8, 8, func(int) int { return 0 })
 	game.Snake = []Point{{X: 4, Y: 4}, {X: 3, Y: 4}}
 	game.Food = Point{X: 0, Y: 0}
 	quest := NewQuestState(GameModeQuest, now, &sequenceRandom{values: []int{0, 0, 0}}, 8, 8)
 
-	for index := 0; index < 4; index++ {
+	for index := 0; index < 3; index++ {
 		quest.OnNormalFood(game, HeatByLevel(1), now.Add(time.Duration(index)*time.Second))
 		if quest.Pickup.Active {
-			t.Fatalf("pickup spawned after %d foods, want no pickup before fifth", index+1)
+			t.Fatalf("pickup spawned after %d foods, want no pickup before fourth", index+1)
 		}
 	}
-	quest.OnNormalFood(game, HeatByLevel(1), now.Add(5*time.Second))
+	quest.OnNormalFood(game, HeatByLevel(1), now.Add(4*time.Second))
 	if !quest.Pickup.Active || quest.Pickup.Upgrade != UpgradeShield {
 		t.Fatalf("pickup = %#v, want active shield", quest.Pickup)
+	}
+}
+
+func TestQuestPickupAndGoldenSpawnTargetsUseRandomRanges(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(10, 10, func(int) int { return 0 })
+	game.Food = Point{X: 0, Y: 0}
+	quest := NewQuestState(GameModeQuest, now, &sequenceRandom{values: []int{0, pickupSpawnMax - pickupSpawnMin, goldenSpawnMax - goldenSpawnMin}}, 10, 10)
+
+	quest.OnNormalFood(game, HeatByLevel(1), now)
+
+	if quest.NextPickupFood != pickupSpawnMax {
+		t.Fatalf("NextPickupFood = %d, want max target %d", quest.NextPickupFood, pickupSpawnMax)
+	}
+	if quest.NextGoldenFood != goldenSpawnMax {
+		t.Fatalf("NextGoldenFood = %d, want max target %d", quest.NextGoldenFood, goldenSpawnMax)
 	}
 }
 
@@ -245,24 +279,24 @@ func TestQuestPickupCollectionAppliesEffects(t *testing.T) {
 	}
 }
 
-func TestQuestDoubleScoreCapTimeoutAndNormalFoodOnly(t *testing.T) {
+func TestQuestDoubleScoreRefreshesTimeoutAndNormalFoodOnly(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(8, 8, func(int) int { return 0 })
 	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
 	quest.DoubleCharges = doubleScoreCap - 1
 	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeDoubleScore, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
 	quest.OnPickupCollected(game, HeatByLevel(1), now)
-	if quest.DoubleCharges != doubleScoreCap {
-		t.Fatalf("DoubleCharges = %d, want cap %d", quest.DoubleCharges, doubleScoreCap)
+	if quest.DoubleCharges != doubleScoreCharges {
+		t.Fatalf("DoubleCharges = %d, want refreshed charges %d", quest.DoubleCharges, doubleScoreCharges)
 	}
 
 	quest.OnNormalFood(game, HeatByLevel(1), now.Add(time.Second))
-	if quest.DoubleCharges != doubleScoreCap-1 || game.Score != 20 {
+	if quest.DoubleCharges != doubleScoreCharges-1 || game.Score != 20 {
 		t.Fatalf("after normal food charges=%d score=%d, want one doubled food", quest.DoubleCharges, game.Score)
 	}
 	quest.Golden = GoldenByte{Active: true}
 	quest.OnGoldenByte(game, HeatByLevel(1), now.Add(2*time.Second))
-	if quest.DoubleCharges != doubleScoreCap-1 {
+	if quest.DoubleCharges != doubleScoreCharges-1 {
 		t.Fatalf("Golden Byte consumed Double Score charge, charges=%d", quest.DoubleCharges)
 	}
 	quest.Tick(game, HeatByLevel(1), now.Add(doubleScoreDuration))
@@ -381,6 +415,26 @@ func TestQuestCollisionEffectsUsePriority(t *testing.T) {
 	}
 }
 
+func TestQuestShieldRecoveryPreservesSnakeLength(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(6, 6, func(int) int { return 0 })
+	game.Snake = []Point{{X: 5, Y: 2}, {X: 4, Y: 2}, {X: 3, Y: 2}, {X: 2, Y: 2}}
+	game.Dir = DirectionRight
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 6, 6)
+	quest.Shield = TimedCharge{Charges: 1, ExpiresAt: now.Add(shieldDuration)}
+
+	result := game.Step()
+	result = quest.TryCollisionEffects(game, result, now)
+
+	if result != StepMoved || game.Over || quest.Shield.Charges != 0 {
+		t.Fatalf("shield result=%v over=%t charges=%d", result, game.Over, quest.Shield.Charges)
+	}
+	if len(game.Snake) != 4 {
+		t.Fatalf("snake length after shield = %d, want preserved length 4", len(game.Snake))
+	}
+	assertSnakeValid(t, game.Snake, game.Width, game.Height)
+}
+
 func TestQuestPhaseUnsafeFallbackKeepsCollision(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(1, 1, func(int) int { return 0 })
@@ -410,6 +464,10 @@ func TestQuestWarpUsesSafeDestinationAndFallback(t *testing.T) {
 	if result != StepMoved || game.Over || quest.Warp.Charges != 0 {
 		t.Fatalf("warp failed: result=%v over=%t charges=%d", result, game.Over, quest.Warp.Charges)
 	}
+	if len(game.Snake) != 2 {
+		t.Fatalf("snake length after warp = %d, want preserved length 2", len(game.Snake))
+	}
+	assertSnakeValid(t, game.Snake, game.Width, game.Height)
 	if game.Snake[0].X < 0 || game.Snake[0].X >= game.Width || game.Snake[0].Y < 0 || game.Snake[0].Y >= game.Height {
 		t.Fatalf("warp head out of bounds: %#v", game.Snake[0])
 	}
@@ -645,8 +703,8 @@ func TestStepGameCollectsGoldenBytePreservesNormalFood(t *testing.T) {
 	if result != StepAteFood {
 		t.Fatalf("stepGame result = %v, want golden-byte growth", result)
 	}
-	if game.Snake[0] != (Point{X: 4, Y: 3}) || len(game.Snake) != 3 {
-		t.Fatalf("snake = %#v, want grown onto golden byte", game.Snake)
+	if game.Snake[0] != (Point{X: 4, Y: 3}) || len(game.Snake) != 4 {
+		t.Fatalf("snake = %#v, want grown by two onto golden byte", game.Snake)
 	}
 	if game.Food != (Point{X: 1, Y: 1}) {
 		t.Fatalf("food = %#v, want preserved normal food", game.Food)

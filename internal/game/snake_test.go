@@ -117,8 +117,14 @@ func TestSnakeRetriesMissingFoodAfterRecover(t *testing.T) {
 
 	game.Recover()
 
-	if !game.FoodValid(nil) {
-		t.Fatalf("Food = %#v, want valid food after recovery reset the snake", game.Food)
+	if game.Over {
+		t.Fatal("Over = true after recovery, want false")
+	}
+	if len(game.Snake) != 2 {
+		t.Fatalf("snake length = %d, want preserved length 2", len(game.Snake))
+	}
+	if game.Food != (Point{X: -1, Y: -1}) {
+		t.Fatalf("Food = %#v on full board, want missing food", game.Food)
 	}
 }
 
