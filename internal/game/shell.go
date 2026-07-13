@@ -454,7 +454,9 @@ func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time)
 		}
 		result := game.StepGrow()
 		if result == StepAteFood {
-			game.GrowTail(1, extraOccupied)
+			// StepGrow preserves the tail for the Golden Byte move, so the
+			// explicit tail growth completes the documented total reward.
+			game.GrowTail(goldenByteGrowth-1, extraOccupied)
 			quest.OnGoldenByte(game, heat, now)
 			quest.EnsureFood(game)
 		}

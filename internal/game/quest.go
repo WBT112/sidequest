@@ -9,16 +9,19 @@ const (
 	GameModeClassic = "classic"
 	GameModeQuest   = "quest"
 
-	comboWindow         = 8 * time.Second
-	minComboWindow      = 5 * time.Second
-	maxComboWindow      = 12 * time.Second
-	goldenByteTTL       = 20 * time.Second
-	goldenByteBase      = 100
-	pickupTTL           = 20 * time.Second
-	pickupSpawnMin      = 4
-	pickupSpawnMax      = 8
-	goldenSpawnMin      = 6
-	goldenSpawnMax      = 9
+	comboWindow    = 8 * time.Second
+	minComboWindow = 5 * time.Second
+	maxComboWindow = 12 * time.Second
+	goldenByteTTL  = 20 * time.Second
+	goldenByteBase = 100
+	pickupTTL      = 20 * time.Second
+	pickupSpawnMin = 4
+	pickupSpawnMax = 8
+	goldenSpawnMin = 6
+	goldenSpawnMax = 9
+	// A Golden Byte is an explicit high-value risk/reward pickup: the move
+	// itself grows once, then tail growth attempts to reach this total.
+	goldenByteGrowth    = 2
 	shieldDuration      = 30 * time.Second
 	phaseDuration       = 20 * time.Second
 	slowClockDuration   = 15 * time.Second
@@ -757,7 +760,7 @@ func secondsLeft(deadline time.Time, now time.Time) int {
 	if remaining <= 0 {
 		return 0
 	}
-	return int(remaining.Round(time.Second).Seconds())
+	return int((remaining + time.Second - time.Nanosecond) / time.Second)
 }
 
 func freePoint(game *SnakeGame, random RandomSource, extraOccupied []Point) (Point, bool) {

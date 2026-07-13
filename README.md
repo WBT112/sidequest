@@ -78,8 +78,8 @@ command pane, on pause, or in the command-finished choice does not raise Heat.
 If you press `C` after the command finishes, the same round continues and Heat
 resumes increasing only during active gameplay.
 
-Quest mode adds combo scoring, one mission per command, Golden Bytes, random
-arena pickups and other stuff.
+Quest mode adds combo scoring, one mission per command, Golden Bytes that grow
+Snake by two cells, random arena pickups and other stuff.
 
 Use `--aug` to show the latest command output line centered in the game pane
 while the original command pane stays unchanged.

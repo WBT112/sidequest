@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -282,6 +283,107 @@ func TestUpdateStatePersistsTmuxSocketWithoutCommand(t *testing.T) {
 	assertRuntimeFilesDoNotContain(t, session.Dir, "bash", "sleep 30", "exit 7")
 }
 
+func TestWriteStateUsesAtomicReplacementAndPrivatePermissions(t *testing.T) {
+	manager := Manager{BaseDir: filepath.Join(t.TempDir(), "sidequest"), IDGenerator: fixedID("atomic-state")}
+	session, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	if err := WriteState(session, State{ID: session.ID, Status: StatusRunning}); err != nil {
+		t.Fatalf("WriteState returned error: %v", err)
+	}
+
+	state, err := ReadState(session)
+	if err != nil {
+		t.Fatalf("ReadState returned error: %v", err)
+	}
+	if state.Status != StatusRunning {
+		t.Fatalf("Status = %q, want %q", state.Status, StatusRunning)
+	}
+	assertMode(t, session.StatePath, regularStateFilePerm)
+	assertNoStateTempFiles(t, session.Dir)
+}
+
+func TestWriteStateRemovesTemporaryFileOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	session := Session{
+		ID:        "bad-state",
+		Dir:       dir,
+		StatePath: filepath.Join(dir, "missing", DefaultStateFileName),
+	}
+
+	err := WriteState(session, State{Status: StatusRunning})
+	if err == nil {
+		t.Fatal("WriteState succeeded, want error")
+	}
+	assertNoStateTempFiles(t, dir)
+}
+
+func TestConcurrentReadStateNeverObservesPartialWrite(t *testing.T) {
+	manager := Manager{BaseDir: filepath.Join(t.TempDir(), "sidequest"), IDGenerator: fixedID("concurrent-state")}
+	session, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	stop := make(chan struct{})
+	errc := make(chan error, 1)
+	var readers sync.WaitGroup
+	for reader := 0; reader < 4; reader++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if _, err := ReadState(session); err != nil {
+					select {
+					case errc <- err:
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+
+	for index := 0; index < 500; index++ {
+		err := UpdateState(session, time.Now(), func(state *State) {
+			state.Status = StatusRunning
+			state.TmuxSocket = strings.Repeat("x", 1024)
+			if index%2 == 0 {
+				state.Status = StatusCompleted
+				state.TmuxSocket = strings.Repeat("y", 1024)
+			}
+		})
+		if err != nil {
+			close(stop)
+			readers.Wait()
+			t.Fatalf("UpdateState returned error: %v", err)
+		}
+		select {
+		case err := <-errc:
+			close(stop)
+			readers.Wait()
+			t.Fatalf("ReadState observed partial write: %v", err)
+		default:
+		}
+	}
+
+	close(stop)
+	readers.Wait()
+	select {
+	case err := <-errc:
+		t.Fatalf("ReadState observed partial write: %v", err)
+	default:
+	}
+	assertNoStateTempFiles(t, session.Dir)
+}
+
 func TestListReadsOnlySessionMetadata(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "sidequest")
 	manager := Manager{
@@ -356,6 +458,19 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("%s mode = %#o, want %#o", path, got, want)
+	}
+}
+
+func assertNoStateTempFiles(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir %s: %v", dir, err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".state-") && strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Fatalf("temporary state file was not removed: %s", filepath.Join(dir, entry.Name()))
+		}
 	}
 }
 

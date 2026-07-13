@@ -1,6 +1,7 @@
 package game
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -373,6 +374,66 @@ func TestQuestEffectHUDPartsKeepsDurationOnlyEffectsReadable(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("effectHUDParts = %#v, want %#v", got, want)
+	}
+}
+
+func TestQuestEffectHUDPartsCeilActiveCountdowns(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		remaining time.Duration
+		want      string
+	}{
+		{name: "one and a half seconds", remaining: 1500 * time.Millisecond, want: "2s"},
+		{name: "one second", remaining: time.Second, want: "1s"},
+		{name: "half second", remaining: 500 * time.Millisecond, want: "1s"},
+		{name: "one millisecond", remaining: time.Millisecond, want: "1s"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+			deadline := now.Add(test.remaining)
+			quest.Shield = TimedCharge{Charges: 1, ExpiresAt: deadline}
+			quest.Phase = TimedCharge{Charges: 1, ExpiresAt: deadline}
+			quest.Warp = TimedCharge{Charges: 1, ExpiresAt: deadline}
+			quest.DoubleCharges = 2
+			quest.DoubleUntil = deadline
+			quest.SlowUntil = deadline
+			quest.ComboKeeperUntil = deadline
+			quest.TurboUntil = deadline
+
+			got := quest.effectHUDParts(now)
+			want := []string{
+				fmt.Sprintf("SHIELD x1 %s", test.want),
+				fmt.Sprintf("PHASE x1 %s", test.want),
+				fmt.Sprintf("WARP x1 %s", test.want),
+				fmt.Sprintf("DOUBLE x2 %s", test.want),
+				fmt.Sprintf("SLOW %s", test.want),
+				fmt.Sprintf("COMBO LOCK %s", test.want),
+				fmt.Sprintf("TURBO %s", test.want),
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("effectHUDParts = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestQuestEffectHUDPartsHidesExpiredCountdowns(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Shield = TimedCharge{Charges: 1, ExpiresAt: now}
+	quest.Phase = TimedCharge{Charges: 1, ExpiresAt: now}
+	quest.Warp = TimedCharge{Charges: 1, ExpiresAt: now}
+	quest.DoubleCharges = 2
+	quest.DoubleUntil = now
+	quest.SlowUntil = now
+	quest.ComboKeeperUntil = now
+	quest.TurboUntil = now
+
+	if got := quest.effectHUDParts(now); len(got) != 0 {
+		t.Fatalf("effectHUDParts = %#v, want no active countdowns", got)
 	}
 }
 
@@ -866,14 +927,15 @@ func TestStepGameCollectsGoldenBytePreservesNormalFood(t *testing.T) {
 	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 6, Y: 6}, ExpiresAt: now.Add(pickupTTL)}
 	quest.DoubleCharges = 3
 	quest.DoubleUntil = now.Add(doubleScoreDuration)
+	beforeLength := len(game.Snake)
 
 	result := stepGame(game, quest, HeatByLevel(1), now)
 
 	if result != StepAteFood {
 		t.Fatalf("stepGame result = %v, want golden-byte growth", result)
 	}
-	if game.Snake[0] != (Point{X: 4, Y: 3}) || len(game.Snake) != 4 {
-		t.Fatalf("snake = %#v, want grown by two onto golden byte", game.Snake)
+	if game.Snake[0] != (Point{X: 4, Y: 3}) || len(game.Snake) != beforeLength+goldenByteGrowth {
+		t.Fatalf("snake = %#v, want grown by %d onto golden byte", game.Snake, goldenByteGrowth)
 	}
 	if game.Food != (Point{X: 1, Y: 1}) {
 		t.Fatalf("food = %#v, want preserved normal food", game.Food)
@@ -900,18 +962,30 @@ func TestStepGameCollectsGoldenByteOnNearlyFullBoard(t *testing.T) {
 	game := NewSnakeGame(3, 2, func(int) int { return 0 })
 	game.Snake = []Point{{X: 1, Y: 0}, {X: 0, Y: 0}}
 	game.Dir = DirectionRight
-	game.Food = Point{X: 1, Y: 1}
+	game.Food = Point{X: 0, Y: 1}
 	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 3, 2)
 	quest.Mission = Mission{ID: MissionGolden2, Label: "Collect 2 Golden Bytes", Target: 2}
 	quest.Golden = GoldenByte{Active: true, Position: Point{X: 2, Y: 0}, ExpiresAt: now.Add(goldenByteTTL)}
-	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 2, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 1, Y: 1}, ExpiresAt: now.Add(pickupTTL)}
+	beforeLength := len(game.Snake)
 
 	result := stepGame(game, quest, HeatByLevel(1), now)
 
 	if result != StepAteFood {
 		t.Fatalf("stepGame result = %v, want golden-byte growth", result)
 	}
-	if game.Food != (Point{X: 1, Y: 1}) {
+	if len(game.Snake) != beforeLength+1 {
+		t.Fatalf("snake length = %d, want only safe movement growth to %d", len(game.Snake), beforeLength+1)
+	}
+	for _, point := range game.Snake {
+		if point.X < 0 || point.X >= game.Width || point.Y < 0 || point.Y >= game.Height {
+			t.Fatalf("snake segment outside board: %#v in %#v", point, game.Snake)
+		}
+		if point == quest.Pickup.Position || point == game.Food {
+			t.Fatalf("snake segment overlaps occupied quest object or food: point=%#v pickup=%#v food=%#v snake=%#v", point, quest.Pickup.Position, game.Food, game.Snake)
+		}
+	}
+	if game.Food != (Point{X: 0, Y: 1}) {
 		t.Fatalf("food = %#v, want preserved valid food on nearly full board", game.Food)
 	}
 	if game.Food == quest.Pickup.Position || game.Occupies(game.Food) {
