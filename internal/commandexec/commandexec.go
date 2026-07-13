@@ -13,11 +13,14 @@ import (
 )
 
 type Executor struct {
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
-	Now    func() time.Time
+	Stdin        io.Reader
+	Stdout       io.Writer
+	Stderr       io.Writer
+	Now          func() time.Time
+	StartupGrace time.Duration
 }
+
+const defaultStartupGrace = 150 * time.Millisecond
 
 func DefaultExecutor() Executor {
 	return Executor{
@@ -29,8 +32,37 @@ func DefaultExecutor() Executor {
 }
 
 func (e Executor) Run(runtimeSession session.Session, command session.Command) error {
+	return e.RunWithStartupReporter(runtimeSession, command, nil)
+}
+
+func (e Executor) RunWithStartupReporter(runtimeSession session.Session, command session.Command, reporter StartupReporter) error {
 	if command.Executable == "" {
 		return session.ErrEmptyExecutable
+	}
+
+	process := exec.Command(command.Executable, command.Arguments...)
+	process.Stdin = e.Stdin
+	process.Stdout = e.Stdout
+	process.Stderr = e.Stderr
+
+	if err := process.Start(); err != nil {
+		startedAt := e.now().UTC()
+		finishedAt := e.now().UTC()
+		durationMillis := finishedAt.Sub(startedAt).Milliseconds()
+		if durationMillis < 0 {
+			durationMillis = 0
+		}
+		_ = session.UpdateState(runtimeSession, finishedAt, func(state *session.State) {
+			state.Status = session.StatusStartFailed
+			state.FinishedAt = &finishedAt
+			state.DurationMillis = &durationMillis
+			state.StartError = err.Error()
+		})
+		_ = reportStartup(reporter, session.CommandStartup{
+			Status: session.CommandStartupStartFailed,
+			Error:  err.Error(),
+		})
+		return err
 	}
 
 	startedAt := e.now().UTC()
@@ -43,26 +75,7 @@ func (e Executor) Run(runtimeSession session.Session, command session.Command) e
 		state.ExitSignal = ""
 		state.StartError = ""
 	}); err != nil {
-		return err
-	}
-
-	process := exec.Command(command.Executable, command.Arguments...)
-	process.Stdin = e.Stdin
-	process.Stdout = e.Stdout
-	process.Stderr = e.Stderr
-
-	if err := process.Start(); err != nil {
-		finishedAt := e.now().UTC()
-		durationMillis := finishedAt.Sub(startedAt).Milliseconds()
-		if durationMillis < 0 {
-			durationMillis = 0
-		}
-		_ = session.UpdateState(runtimeSession, finishedAt, func(state *session.State) {
-			state.Status = session.StatusStartFailed
-			state.FinishedAt = &finishedAt
-			state.DurationMillis = &durationMillis
-			state.StartError = err.Error()
-		})
+		_ = process.Process.Kill()
 		return err
 	}
 
@@ -70,20 +83,48 @@ func (e Executor) Run(runtimeSession session.Session, command session.Command) e
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(signals)
 
-	done := make(chan struct{})
+	signalDone := make(chan struct{})
 	go func() {
 		for {
 			select {
 			case <-signals:
-			case <-done:
+			case <-signalDone:
 				return
 			}
 		}
 	}()
+	defer close(signalDone)
 
-	waitErr := process.Wait()
-	close(done)
+	waitErrc := make(chan error, 1)
+	go func() {
+		waitErrc <- process.Wait()
+	}()
 
+	if grace := e.startupGrace(); grace <= 0 {
+		if err := reportStartup(reporter, session.CommandStartup{Status: session.CommandStartupStarted}); err != nil {
+			_ = process.Process.Kill()
+			<-waitErrc
+			return err
+		}
+	} else {
+		timer := time.NewTimer(grace)
+		select {
+		case waitErr := <-waitErrc:
+			return e.recordFinished(runtimeSession, startedAt, waitErr, reporter)
+		case <-timer.C:
+			if err := reportStartup(reporter, session.CommandStartup{Status: session.CommandStartupStarted}); err != nil {
+				_ = process.Process.Kill()
+				<-waitErrc
+				return err
+			}
+		}
+	}
+
+	waitErr := <-waitErrc
+	return e.recordFinished(runtimeSession, startedAt, waitErr, nil)
+}
+
+func (e Executor) recordFinished(runtimeSession session.Session, startedAt time.Time, waitErr error, reporter StartupReporter) error {
 	finishedAt := e.now().UTC()
 	durationMillis := finishedAt.Sub(startedAt).Milliseconds()
 	if durationMillis < 0 {
@@ -101,7 +142,24 @@ func (e Executor) Run(runtimeSession session.Session, command session.Command) e
 		return err
 	}
 
+	if reporter != nil {
+		if err := reportStartup(reporter, startupFromResult(result, waitErr)); err != nil {
+			return err
+		}
+	}
+
 	return waitErr
+}
+
+type StartupReporter interface {
+	ReportStartup(session.CommandStartup) error
+}
+
+func reportStartup(reporter StartupReporter, startup session.CommandStartup) error {
+	if reporter == nil {
+		return nil
+	}
+	return reporter.ReportStartup(startup)
 }
 
 func ExitCodeForError(err error) int {
@@ -133,6 +191,13 @@ func (e Executor) now() time.Time {
 	return time.Now()
 }
 
+func (e Executor) startupGrace() time.Duration {
+	if e.StartupGrace != 0 {
+		return e.StartupGrace
+	}
+	return defaultStartupGrace
+}
+
 type result struct {
 	status     string
 	exitCode   *int
@@ -162,4 +227,23 @@ func resultFromWaitError(err error) result {
 	}
 
 	return result{status: session.StatusFailed, exitSignal: fmt.Sprintf("unknown: %v", err)}
+}
+
+func startupFromResult(result result, err error) session.CommandStartup {
+	startup := session.CommandStartup{
+		ExitCode:   result.exitCode,
+		ExitSignal: result.exitSignal,
+	}
+	switch result.status {
+	case session.StatusCompleted:
+		startup.Status = session.CommandStartupCompleted
+	case session.StatusInterrupted:
+		startup.Status = session.CommandStartupInterrupted
+	default:
+		startup.Status = session.CommandStartupFailed
+	}
+	if err != nil {
+		startup.Error = err.Error()
+	}
+	return startup
 }

@@ -42,6 +42,38 @@ func TestRunInitializesAndFinalizesScreenOnQuit(t *testing.T) {
 	}
 }
 
+func TestRunSyncsScreenBeforeInitialRender(t *testing.T) {
+	screen := &initialSyncScreen{
+		SimulationScreen: tcell.NewSimulationScreen(""),
+		firstShow:        make(chan screenSize, 1),
+		syncSizeAfter:    2,
+	}
+	screen.SetSize(60, 12)
+	screen.syncedWidth = 100
+	screen.syncedHeight = 12
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval:       time.Hour,
+		InitialRenderDelay: time.Millisecond,
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	select {
+	case size := <-screen.firstShow:
+		if size.width != 100 || size.height != 12 {
+			t.Fatalf("initial render size = %dx%d, want synced 100x12", size.width, size.height)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial render")
+	}
+	cancelShell(t, cancel, errc)
+}
+
 func TestRunIgnoresActiveQForRunningCommand(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(60, 12)
@@ -1228,6 +1260,44 @@ func TestRunDrawsColoredPlayfieldWithThickWalls(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
+func TestRunDrawsAsciiCompatiblePlayfieldWhenRequested(t *testing.T) {
+	t.Setenv("SIDEQUEST_GRAPHICS", "ascii")
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.SetSize(40, 12)
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning}, nil
+		},
+		PollInterval: time.Hour,
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	waitForRenderedText(t, screen, "ASCII graphics mode")
+	waitForRenderedText(t, screen, "Press Arrow Keys/WASD to play")
+	arena := arenaForScreen(screen)
+	topWall, _, topStyle, _ := screen.GetContent(20, 4)
+	sideWall, _, _, _ := screen.GetContent(0, 6)
+	wallForeground, wallBackground, _ := topStyle.Decompose()
+	if topWall != '=' || sideWall != '|' {
+		t.Fatalf("wall runes = %q %q, want ASCII walls", topWall, sideWall)
+	}
+	if wallForeground != tcell.ColorTeal || wallBackground == tcell.ColorTeal {
+		t.Fatalf("wall colors foreground=%v background=%v, want teal foreground without teal fill", wallForeground, wallBackground)
+	}
+	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
+	waitForMissingRenderedText(t, screen, "ASCII graphics mode")
+	head, _, _, _ := screen.GetContent(arena.CellX(arena.Width/2), arena.CellY(arena.Height/2))
+	if head != '@' {
+		t.Fatalf("snake head = %q, want ASCII head", head)
+	}
+
+	cancelShell(t, cancel, errc)
+}
+
 func TestRunDrawsMonochromeClassicWithoutColors(t *testing.T) {
 	screen := tcell.NewSimulationScreen("UTF-8")
 	screen.SetSize(40, 12)
@@ -1479,4 +1549,39 @@ type finalizingScreen struct {
 func (s *finalizingScreen) Fini() {
 	s.finiCalled = true
 	s.SimulationScreen.Fini()
+}
+
+type initialSyncScreen struct {
+	tcell.SimulationScreen
+	syncedWidth   int
+	syncedHeight  int
+	syncs         int
+	syncSizeAfter int
+	firstShow     chan screenSize
+}
+
+type screenSize struct {
+	width  int
+	height int
+}
+
+func (s *initialSyncScreen) Sync() {
+	s.syncs++
+	syncSizeAfter := s.syncSizeAfter
+	if syncSizeAfter == 0 {
+		syncSizeAfter = 1
+	}
+	if s.syncs >= syncSizeAfter {
+		s.SimulationScreen.SetSize(s.syncedWidth, s.syncedHeight)
+	}
+	s.SimulationScreen.Sync()
+}
+
+func (s *initialSyncScreen) Show() {
+	width, height := s.Size()
+	select {
+	case s.firstShow <- screenSize{width: width, height: height}:
+	default:
+	}
+	s.SimulationScreen.Show()
 }

@@ -69,6 +69,87 @@ func TestRunRecordsStartFailure(t *testing.T) {
 	if state.StartError == "" {
 		t.Fatal("StartError is empty")
 	}
+	if state.Status == session.StatusRunning {
+		t.Fatal("Status was set to running before process start succeeded")
+	}
+}
+
+func TestRunReportsStartedAfterStartupGrace(t *testing.T) {
+	runtimeSession := newTestSession(t, "started")
+	reporter := &startupRecorder{}
+	executor := Executor{StartupGrace: 10 * time.Millisecond, Now: fixedClock(
+		time.Now(),
+		time.Now().Add(250*time.Millisecond),
+	)}
+
+	err := executor.RunWithStartupReporter(runtimeSession, session.Command{
+		Executable: "bash",
+		Arguments:  []string{"-c", "sleep 0.05"},
+	}, reporter)
+	if err != nil {
+		t.Fatalf("RunWithStartupReporter returned error: %v", err)
+	}
+	if reporter.startup.Status != session.CommandStartupStarted {
+		t.Fatalf("startup status = %#v, want started", reporter.startup)
+	}
+}
+
+func TestRunReportsImmediateZeroExitDuringStartupGrace(t *testing.T) {
+	runtimeSession := newTestSession(t, "immediate-zero")
+	reporter := &startupRecorder{}
+	executor := Executor{StartupGrace: 100 * time.Millisecond, Now: fixedClock(time.Now(), time.Now().Add(time.Millisecond))}
+
+	err := executor.RunWithStartupReporter(runtimeSession, session.Command{Executable: "true"}, reporter)
+	if err != nil {
+		t.Fatalf("RunWithStartupReporter returned error: %v", err)
+	}
+	if reporter.startup.Status != session.CommandStartupCompleted {
+		t.Fatalf("startup status = %#v, want completed", reporter.startup)
+	}
+	if reporter.startup.ExitCode == nil || *reporter.startup.ExitCode != 0 {
+		t.Fatalf("startup exit code = %v, want 0", reporter.startup.ExitCode)
+	}
+}
+
+func TestRunReportsImmediateNonZeroExitDuringStartupGrace(t *testing.T) {
+	runtimeSession := newTestSession(t, "immediate-fail")
+	reporter := &startupRecorder{}
+	executor := Executor{StartupGrace: 100 * time.Millisecond, Now: fixedClock(time.Now(), time.Now().Add(time.Millisecond))}
+
+	err := executor.RunWithStartupReporter(runtimeSession, session.Command{
+		Executable: "bash",
+		Arguments:  []string{"-c", "exit 7"},
+	}, reporter)
+	if err == nil {
+		t.Fatal("RunWithStartupReporter succeeded, want exit error")
+	}
+	if reporter.startup.Status != session.CommandStartupFailed {
+		t.Fatalf("startup status = %#v, want failed", reporter.startup)
+	}
+	if reporter.startup.ExitCode == nil || *reporter.startup.ExitCode != 7 {
+		t.Fatalf("startup exit code = %v, want 7", reporter.startup.ExitCode)
+	}
+}
+
+func TestRunReportsBadShebangStartFailure(t *testing.T) {
+	runtimeSession := newTestSession(t, "bad-shebang")
+	script := filepath.Join(t.TempDir(), "bad-shebang")
+	if err := os.WriteFile(script, []byte("#!/definitely/missing/sidequest-interpreter\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	reporter := &startupRecorder{}
+	executor := Executor{StartupGrace: 100 * time.Millisecond, Now: fixedClock(time.Now(), time.Now().Add(time.Millisecond))}
+
+	err := executor.RunWithStartupReporter(runtimeSession, session.Command{Executable: script}, reporter)
+	if err == nil {
+		t.Fatal("RunWithStartupReporter succeeded, want start failure")
+	}
+	if reporter.startup.Status != session.CommandStartupStartFailed {
+		t.Fatalf("startup status = %#v, want start_failed", reporter.startup)
+	}
+	if reporter.startup.Error == "" {
+		t.Fatal("startup error is empty")
+	}
 }
 
 func TestRunPreservesArgumentsWithSpaces(t *testing.T) {
@@ -166,4 +247,13 @@ func fixedClock(times ...time.Time) func() time.Time {
 		index++
 		return value
 	}
+}
+
+type startupRecorder struct {
+	startup session.CommandStartup
+}
+
+func (r *startupRecorder) ReportStartup(startup session.CommandStartup) error {
+	r.startup = startup
+	return nil
 }

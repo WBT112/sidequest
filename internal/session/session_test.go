@@ -98,7 +98,7 @@ func TestCommandIsNeverWrittenToRuntimeFiles(t *testing.T) {
 		errc <- err
 	}()
 
-	if err := listener.Serve(ctx, command); err != nil {
+	if _, err := listener.Serve(ctx, command); err != nil {
 		t.Fatalf("Serve returned error: %v", err)
 	}
 	if err := <-errc; err != nil {
@@ -138,7 +138,7 @@ func TestCommandHandoffPreservesArgumentArray(t *testing.T) {
 		errc <- err
 	}()
 
-	if err := listener.Serve(ctx, want); err != nil {
+	if _, err := listener.Serve(ctx, want); err != nil {
 		t.Fatalf("Serve returned error: %v", err)
 	}
 	if err := <-errc; err != nil {

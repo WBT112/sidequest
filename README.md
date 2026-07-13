@@ -16,6 +16,7 @@ You also get noticed when the command finishes. By default, command-pane output 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Gameplay](#gameplay)
+- [FAQ / Known Issues](#faq--known-issues)
 
 ## Installation
 
@@ -91,6 +92,24 @@ For complete controls and behavior details, use:
 
 ```bash
 man sidequest
+```
+
+## FAQ / Known Issues
+
+### Snake graphics look wrong in MobaXterm or older SSH terminals
+
+Some terminals render block characters differently. Sidequest keeps rich block
+graphics by default, but can use a safer ASCII fallback:
+
+```bash
+SIDEQUEST_GRAPHICS=ascii sidequest -- <command>
+```
+
+If Sidequest detects a fallback but your terminal renders rich graphics
+correctly, force the default style:
+
+```bash
+SIDEQUEST_GRAPHICS=rich sidequest -- <command>
 ```
 
 ## Sessions and History

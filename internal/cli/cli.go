@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -64,34 +65,35 @@ type Result struct {
 }
 
 type App struct {
-	Out            io.Writer
-	Err            io.Writer
-	Version        string
-	Preflight      func() error
-	CreateSession  func() (session.Session, error)
-	ListSessions   func() ([]session.Record, error)
-	AttachSession  func(string) error
-	TmuxHasSession func(tmux.Info) bool
-	CloseTmux      func(tmux.Info) error
-	DetachClients  func(tmux.Info) error
-	CapturePane    func(tmux.Info) (string, bool, error)
-	CleanupSession func(session.Session) error
-	StoreRun       func(session.Record, string, bool) (runhistory.Run, error)
-	ListRuns       func() ([]runhistory.Run, error)
-	FindRun        func(string) (runhistory.Run, error)
-	OutputRun      func(string) error
-	PurgeRun       func(string) error
-	RunLayout      func(session.Session, session.Command) error
-	StartLayout    func(session.Session, []string, []string) (tmux.Info, error)
-	AttachLayout   func(tmux.Info) error
-	ServeCommand   func(context.Context, *session.CommandListener, session.Command) error
-	UpdateState    func(session.Session, time.Time, func(*session.State)) error
-	ReadState      func(session.Session) (session.State, error)
-	ReceiveCommand func(context.Context, string) (session.Command, error)
-	ExecCommand    func(session.Session, session.Command) error
-	RunGameShell   func(string) error
-	RunShell       func(game.Shell) error
-	Now            func() time.Time
+	Out             io.Writer
+	Err             io.Writer
+	Version         string
+	Preflight       func() error
+	CreateSession   func() (session.Session, error)
+	ListSessions    func() ([]session.Record, error)
+	AttachSession   func(string) error
+	TmuxHasSession  func(tmux.Info) bool
+	CloseTmux       func(tmux.Info) error
+	DetachClients   func(tmux.Info) error
+	CapturePane     func(tmux.Info) (string, bool, error)
+	CleanupSession  func(session.Session) error
+	StoreRun        func(session.Record, string, bool) (runhistory.Run, error)
+	ListRuns        func() ([]runhistory.Run, error)
+	FindRun         func(string) (runhistory.Run, error)
+	OutputRun       func(string) error
+	PurgeRun        func(string) error
+	RunLayout       func(session.Session, session.Command) error
+	StartLayout     func(session.Session, []string, []string) (tmux.Info, error)
+	AttachLayout    func(tmux.Info) error
+	ServeCommand    func(context.Context, *session.CommandListener, session.Command) (session.CommandStartup, error)
+	UpdateState     func(session.Session, time.Time, func(*session.State)) error
+	ReadState       func(session.Session) (session.State, error)
+	ReceiveCommand  func(context.Context, string) (session.Command, error)
+	ReceiveExchange func(context.Context, string) (session.Command, *session.CommandExchange, error)
+	ExecCommand     func(session.Session, session.Command) error
+	RunGameShell    func(string) error
+	RunShell        func(game.Shell) error
+	Now             func() time.Time
 }
 
 func (a App) Run(args []string) int {
@@ -105,7 +107,7 @@ func (a App) Run(args []string) int {
 	if len(args) == 2 && args[0] == commandRunnerMode {
 		if err := a.runCommandRunner(args[1]); err != nil {
 			fmt.Fprintf(a.errorWriter(), "sidequest command runner: %v\n", err)
-			return commandexec.ExitCodeForError(err)
+			return exitCodeForError(err)
 		}
 		return 0
 	}
@@ -188,14 +190,17 @@ func (a App) Run(args []string) int {
 		fmt.Fprintf(a.outputWriter(), "sidequest %s\n", a.version())
 		return 0
 	default:
-		if err := a.runPreflight(); err != nil {
-			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
-			return 2
-		}
-
 		command := session.Command{
 			Executable: result.Config.Executable,
 			Arguments:  result.Config.Arguments,
+		}
+		if err := validateCommandExecutable(command.Executable); err != nil {
+			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+			return exitCodeForError(err)
+		}
+		if err := a.runPreflight(); err != nil {
+			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
+			return 2
 		}
 		runtimeSession, err := a.createSession()
 		if err != nil {
@@ -220,7 +225,7 @@ func (a App) Run(args []string) int {
 				err = a.cleanupStartupFailure(err, runtimeSession, tmux.Info{}, false)
 			}
 			fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
-			return 2
+			return exitCodeForError(err)
 		}
 
 		return 0
@@ -511,7 +516,7 @@ func (a App) attachLayout(info tmux.Info) error {
 	return tmux.Layout{}.Attach(info)
 }
 
-func (a App) serveCommand(ctx context.Context, listener *session.CommandListener, command session.Command) error {
+func (a App) serveCommand(ctx context.Context, listener *session.CommandListener, command session.Command) (session.CommandStartup, error) {
 	if a.ServeCommand != nil {
 		return a.ServeCommand(ctx, listener, command)
 	}
@@ -568,8 +573,12 @@ func (a App) runLayout(runtimeSession session.Session, command session.Command) 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := a.serveCommand(ctx, listener, command); err != nil {
+	startup, err := a.serveCommand(ctx, listener, command)
+	if err != nil {
 		return a.cleanupStartupFailure(err, runtimeSession, info, ownsTmuxInfo(runtimeSession, info))
+	}
+	if startup.Status != session.CommandStartupStarted {
+		return a.handleStartupTerminal(runtimeSession, info, startup)
 	}
 
 	if err := a.attachLayout(info); err != nil {
@@ -588,21 +597,39 @@ func (a App) runCommandRunner(socketPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	receive := a.ReceiveCommand
-	if receive == nil {
-		receive = session.ReceiveCommand
+	if a.ReceiveCommand != nil {
+		command, err := a.ReceiveCommand(ctx, socketPath)
+		if err != nil {
+			return err
+		}
+		runtimeSession := session.FromSocketPath(socketPath)
+		execute := a.ExecCommand
+		if execute == nil {
+			execute = commandexec.DefaultExecutor().Run
+		}
+		return execute(runtimeSession, command)
 	}
-	command, err := receive(ctx, socketPath)
+
+	receive := a.ReceiveExchange
+	if receive == nil {
+		receive = session.ReceiveCommandExchange
+	}
+	command, exchange, err := receive(ctx, socketPath)
 	if err != nil {
 		return err
 	}
+	defer exchange.Close()
+
 	runtimeSession := session.FromSocketPath(socketPath)
 
 	execute := a.ExecCommand
-	if execute == nil {
-		execute = commandexec.DefaultExecutor().Run
+	if execute != nil {
+		if err := exchange.ReportStartup(session.CommandStartup{Status: session.CommandStartupStarted}); err != nil {
+			return err
+		}
+		return execute(runtimeSession, command)
 	}
-	return execute(runtimeSession, command)
+	return commandexec.DefaultExecutor().RunWithStartupReporter(runtimeSession, command, exchange)
 }
 
 func (a App) runGameShell(statePath string) error {
@@ -775,6 +802,17 @@ func (a App) cleanupStartupFailure(primary error, runtimeSession session.Session
 	return appendCleanupError(err, a.cleanupSession(runtimeSession))
 }
 
+func (a App) handleStartupTerminal(runtimeSession session.Session, info tmux.Info, startup session.CommandStartup) error {
+	if ownsTmuxInfo(runtimeSession, info) && a.tmuxHasSession(info) {
+		if output, _, err := a.captureCommandPane(info); err == nil && output != "" {
+			fmt.Fprint(a.outputWriter(), output)
+		}
+	}
+
+	primary := startupError(startup)
+	return a.cleanupStartupFailure(primary, runtimeSession, info, ownsTmuxInfo(runtimeSession, info))
+}
+
 func ownsTmuxInfo(runtimeSession session.Session, info tmux.Info) bool {
 	want := "sidequest-" + runtimeSession.ID
 	return info.SocketName == want && info.SessionName == want
@@ -788,6 +826,116 @@ func appendCleanupError(primary error, cleanupErr error) error {
 		return cleanupErr
 	}
 	return fmt.Errorf("%w; cleanup failed: %v", primary, cleanupErr)
+}
+
+type exitCoder interface {
+	ExitCode() int
+}
+
+type commandExitError struct {
+	message string
+	code    int
+}
+
+func (e commandExitError) Error() string {
+	return e.message
+}
+
+func (e commandExitError) ExitCode() int {
+	return e.code
+}
+
+func exitCodeForError(err error) int {
+	if err == nil {
+		return 0
+	}
+	var coded exitCoder
+	if errors.As(err, &coded) {
+		return coded.ExitCode()
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return commandexec.ExitCodeForError(exitErr)
+	}
+	return 2
+}
+
+func validateCommandExecutable(executable string) error {
+	if executable == "" {
+		return session.ErrEmptyExecutable
+	}
+	if strings.ContainsRune(executable, os.PathSeparator) {
+		return validateExplicitExecutable(executable)
+	}
+	if _, err := exec.LookPath(executable); err != nil {
+		return commandExitError{message: fmt.Sprintf("command not found: %s", executable), code: 127}
+	}
+	return nil
+}
+
+func validateExplicitExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return commandExitError{message: fmt.Sprintf("command not found: %s", path), code: 127}
+		}
+		if errors.Is(err, os.ErrPermission) {
+			return commandExitError{message: fmt.Sprintf("cannot start %s: permission denied", path), code: 126}
+		}
+		return err
+	}
+	if info.IsDir() {
+		return commandExitError{message: fmt.Sprintf("cannot start %s: is a directory", path), code: 126}
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		return commandExitError{message: fmt.Sprintf("cannot start %s: permission denied", path), code: 126}
+	}
+	return nil
+}
+
+func startupError(startup session.CommandStartup) error {
+	switch startup.Status {
+	case session.CommandStartupStartFailed:
+		return commandExitError{message: startupErrorMessage(startup, "command failed to start"), code: startupFailureExitCode(startup)}
+	case session.CommandStartupCompleted:
+		return nil
+	case session.CommandStartupFailed:
+		return commandExitError{message: startupErrorMessage(startup, "command exited during startup"), code: startupExitCode(startup, 1)}
+	case session.CommandStartupInterrupted:
+		return commandExitError{message: startupErrorMessage(startup, "command interrupted during startup"), code: startupExitCode(startup, 130)}
+	default:
+		return fmt.Errorf("unexpected command startup status %q", startup.Status)
+	}
+}
+
+func startupErrorMessage(startup session.CommandStartup, fallback string) string {
+	if startup.Error != "" {
+		return startup.Error
+	}
+	if startup.ExitCode != nil {
+		return fmt.Sprintf("%s with status %d", fallback, *startup.ExitCode)
+	}
+	if startup.ExitSignal != "" {
+		return fmt.Sprintf("%s by signal %s", fallback, startup.ExitSignal)
+	}
+	return fallback
+}
+
+func startupFailureExitCode(startup session.CommandStartup) int {
+	if startup.Error != "" && strings.Contains(strings.ToLower(startup.Error), "permission denied") {
+		return 126
+	}
+	return 127
+}
+
+func startupExitCode(startup session.CommandStartup, fallback int) int {
+	if startup.ExitCode != nil {
+		return *startup.ExitCode
+	}
+	if startup.ExitSignal != "" {
+		return fallback
+	}
+	return fallback
 }
 
 func (a App) listRuns() ([]runhistory.Run, error) {
