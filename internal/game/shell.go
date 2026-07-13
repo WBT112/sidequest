@@ -798,40 +798,11 @@ func render(screen tcell.Screen, view viewState) {
 	drawBox(screen, 0, 0, width, height, style)
 	drawPlayfield(screen, style)
 
-	controlLine := "Arrows/WASD start  F9 hide  F12 command  F10 detach"
-	if view.Started {
-		controlLine = "Arrows/WASD move  P pause  F9 hide  F10 detach  F12 command"
-	}
-	if view.Pause.Active() {
-		controlLine = pauseLine(view.Pause)
-	}
-	if view.Completion == CompletionUndecided {
-		controlLine = "Command finished  C continue  Q quit  F9 hide  F10 detach"
-	}
-	if view.Frozen {
-		controlLine = "Command finished  Q quit  F9 hide  F10 detach"
-	}
-	if view.Game != nil && view.Game.Over && !view.Frozen {
-		controlLine = "Round over  R restart  F9 hide  F10 detach"
-	}
-	if view.Quest.Enabled() && view.PendingScore == nil && !view.Frozen && (view.Game == nil || !view.Game.Over) {
-		controlLine = questLine(view)
-	}
-	if view.HeatNotice != "" {
-		controlLine = view.HeatNotice
-	}
-	if view.PendingScore != nil {
-		controlLine = "New high score. Type name  Enter confirm  F9 hide"
-		if session.IsTerminalStatus(view.SessionState) {
-			controlLine = "New high score. Type name  Enter confirm  Q save+exit"
-		}
-	}
-
 	lines := []renderLine{
 		{y: 0, text: "Sidequest Snake [" + gameModeLabel(view) + "]", style: titleStyle, centered: true},
 		{y: 1, text: "Command state: " + displayState(view.SessionState), style: statusStyle, centered: true},
 		{y: 2, text: heatScoreLine(view), style: scoreStyle, centered: true},
-		{y: 3, text: controlLine, style: secondaryStyle, centered: true},
+		{y: 3, text: statusLine(view), style: secondaryStyle, centered: true},
 	}
 	if session.IsTerminalStatus(view.SessionState) {
 		lines = append(lines, renderLine{y: height - 2, text: resultSummary(view.State), style: secondaryStyle})
@@ -1381,6 +1352,37 @@ func pauseLine(pause PauseState) string {
 	default:
 		return ""
 	}
+}
+
+func statusLine(view viewState) string {
+	if view.PendingScore != nil {
+		if session.IsTerminalStatus(view.SessionState) {
+			return "New high score. Type name  Enter confirm  Q save+exit"
+		}
+		return "New high score. Type name  Enter confirm  F9 hide"
+	}
+	if view.Completion == CompletionUndecided {
+		return "Command finished  C continue  Q quit  F9 hide  F10 detach"
+	}
+	if view.Frozen {
+		return "Command finished  Q quit  F9 hide  F10 detach"
+	}
+	if view.Game != nil && view.Game.Over {
+		return "Round over  R restart  F9 hide  F10 detach"
+	}
+	if view.Pause.Active() {
+		return pauseLine(view.Pause)
+	}
+	if view.HeatNotice != "" {
+		return view.HeatNotice
+	}
+	if view.Quest.Enabled() {
+		return questLine(view)
+	}
+	if view.Started {
+		return "Arrows/WASD move  P pause  F9 hide  F10 detach  F12 command"
+	}
+	return "Arrows/WASD start  F9 hide  F12 command  F10 detach"
 }
 
 func heatTransitionText(heat HeatLevel) string {
