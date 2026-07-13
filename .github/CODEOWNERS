@@ -1,0 +1,9 @@
+# Security-sensitive project files require owner review.
+.github/workflows/** @WBT112
+install.sh @WBT112
+.goreleaser.yml @WBT112
+.goreleaser.yaml @WBT112
+go.mod @WBT112
+go.sum @WBT112
+.github/dependabot.yml @WBT112
+SECURITY.md @WBT112

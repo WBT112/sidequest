@@ -36,6 +36,12 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  extra_files:
+    - glob: ./install.sh
+
+release:
+  extra_files:
+    - glob: ./install.sh
 
 nfpms:
   - id: linux-packages

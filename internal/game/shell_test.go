@@ -165,6 +165,100 @@ func TestRenderCentersQuestHUDLines(t *testing.T) {
 	}
 }
 
+func TestStatusLineKeepsCompletionChoiceAboveQuestAndHeatMessages(t *testing.T) {
+	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	quest := &QuestState{
+		Mode:            GameModeQuest,
+		Mission:         Mission{ID: MissionGolden2, Label: "Collect 2 Golden Bytes", Target: 2},
+		MissionProgress: 1,
+		Message:         "PICKUP: SHIELD - NEXT COLLISION BLOCKED",
+		MessageUntil:    now.Add(time.Second),
+	}
+
+	tests := []struct {
+		name string
+		view viewState
+	}{
+		{
+			name: "mission",
+			view: viewState{
+				Completion: CompletionUndecided,
+				Quest: &QuestState{
+					Mode:            GameModeQuest,
+					Mission:         Mission{ID: MissionGolden2, Label: "Collect 2 Golden Bytes", Target: 2},
+					MissionProgress: 1,
+				},
+			},
+		},
+		{
+			name: "pickup",
+			view: viewState{Completion: CompletionUndecided, Quest: quest},
+		},
+		{
+			name: "heat",
+			view: viewState{Completion: CompletionUndecided, Quest: quest, HeatNotice: "COMMAND HEAT RISING... SPEED 3  SCORE x1.4"},
+		},
+	}
+
+	for _, test := range tests {
+		got := statusLine(test.view)
+		if !strings.Contains(got, "Command finished  C continue  Q quit") {
+			t.Fatalf("%s statusLine = %q, want completion controls", test.name, got)
+		}
+		for _, unwanted := range []string{"QUEST:", "PICKUP:", "COMMAND HEAT"} {
+			if strings.Contains(got, unwanted) {
+				t.Fatalf("%s statusLine = %q, should not contain %q", test.name, got, unwanted)
+			}
+		}
+	}
+}
+
+func TestStatusLineReturnsQuestMessageAfterCompletionContinue(t *testing.T) {
+	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	view := viewState{
+		Completion: CompletionContinue,
+		Quest: &QuestState{
+			Mode:         GameModeQuest,
+			Message:      "PICKUP: TURBO",
+			MessageUntil: now.Add(time.Second),
+		},
+	}
+
+	if got := statusLine(view); got != "PICKUP: TURBO" {
+		t.Fatalf("statusLine = %q, want Quest message after continue", got)
+	}
+}
+
+func TestRenderCompactStatusLineKeepsCompletionPriority(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(36, 12)
+
+	render(screen, viewState{
+		SessionState: session.StatusCompleted,
+		Completion:   CompletionUndecided,
+		Heat:         HeatByLevel(3),
+		HeatNotice:   "COMMAND HEAT RISING... SPEED 3  SCORE x1.4",
+		Quest: &QuestState{
+			Mode:    GameModeQuest,
+			Message: "PICKUP: DOUBLE SCORE",
+		},
+	})
+
+	text := screenText(screen)
+	if !strings.Contains(text, "Command finished") {
+		t.Fatalf("compact screen missing completion status:\n%s", text)
+	}
+	for _, unwanted := range []string{"PICKUP:", "COMMAND HEAT"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("compact screen contains %q despite completion priority:\n%s", unwanted, text)
+		}
+	}
+}
+
 func TestRunUpdatesQuestStatsWhenCommandFinishIsQuit(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	screen.SetSize(80, 12)

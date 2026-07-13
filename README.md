@@ -7,7 +7,7 @@ Look no further!
 
 Sidequest runs your command in one tmux pane and focuses a small Snake game in another.
 The command stays visible, so you can follow what's happening while you play. Now with Boss-Key(F9).
-You also get noticed when the command finishes. And the command output is stored for later review. So you kind of do documentation at the same time.
+You also get noticed when the command finishes. By default, command-pane output is stored for later review; use `--no-history` for sensitive commands.
 
 ![Sidequest Snake gameplay](docs/snake1.png)
 
@@ -28,12 +28,16 @@ sudo apt install tmux
 sudo dnf install tmux
 ```
 
-### Quick Install With Curl
+### Install From a Release
 
-Install Sidequest and add `$HOME/.local/bin` to your shell startup file:
+Choose a release tag, download the versioned installer from GitHub Releases,
+inspect it, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh -s -- --update-path
+SIDEQUEST_VERSION=v0.2.0
+curl -fsSLO "https://github.com/WBT112/sidequest/releases/download/${SIDEQUEST_VERSION}/install.sh"
+less install.sh
+sh install.sh --update-path
 ```
 
 Open a new terminal after installation, or run the reload command printed by the
@@ -43,20 +47,24 @@ installer. The installer detects Bash, Zsh and Fish and falls back to
 To install without changing a shell startup file:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh
-```
-
-Safer inspect-before-run variant:
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh
-less install.sh
-sh install.sh --update-path
+sh install.sh
 ```
 
 The installer downloads the matching GitHub Release archive, verifies
-`checksums.txt`, and installs to `$HOME/.local/bin` by default. To install
-elsewhere:
+`checksums.txt`, and installs to `$HOME/.local/bin` by default. Release assets
+also include GitHub artifact attestations. After downloading an artifact, you can
+verify its provenance with:
+
+```bash
+gh attestation verify sidequest_0.2.0_linux_amd64.tar.gz --repo WBT112/sidequest
+gh attestation verify install.sh --repo WBT112/sidequest
+```
+
+Install and run Sidequest without `sudo` by default. Use elevated privileges
+only when you intentionally install into a system directory such as
+`/usr/local/bin`; do not combine `sudo` with `--update-path`.
+
+To install elsewhere:
 
 ```bash
 SIDEQUEST_INSTALL_DIR=/usr/local/bin sh install.sh
@@ -90,7 +98,10 @@ PowerShell or `cmd.exe`:
 ```bash
 sudo apt update
 sudo apt install tmux curl ca-certificates
-curl -fsSL https://raw.githubusercontent.com/WBT112/sidequest/main/install.sh | sh -s -- --update-path
+SIDEQUEST_VERSION=v0.2.0
+curl -fsSLO "https://github.com/WBT112/sidequest/releases/download/${SIDEQUEST_VERSION}/install.sh"
+less install.sh
+sh install.sh --update-path
 ```
 
 Open a new WSL terminal and verify the installation:
@@ -126,6 +137,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 sidequest -- ssh deploy@example.com
 sidequest -- sh -c 'sudo du -xh /var /usr /home 2>/dev/null | sort -h'
+sidequest --no-history -- ssh production.example.com
 sidequest --mode quest -- make test
 sidequest -- codex
 sidequest -- claude "Run the test suite, fix any failures, and summarize the changes."
@@ -182,10 +194,20 @@ sidequest output last
 sidequest purge <run-id>
 ```
 
-Finished runs keep visible command-pane output under
+By default, finished runs keep visible command-pane output under
 `${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/`. Sidequest stores result
 metadata and pane output, not the command or argument list. Terminal output may
 still contain sensitive data.
+
+For sensitive workloads, disable run history:
+
+```bash
+sidequest --no-history -- <command> [arguments...]
+```
+
+In no-history mode, Sidequest does not capture the command pane, does not write
+an output file, and does not create stored run metadata. The live tmux pane
+scrollback remains visible until the Sidequest session is closed.
 
 Game statistics and separate Classic/Quest TOP 5 lists are stored locally in
 `${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json`.

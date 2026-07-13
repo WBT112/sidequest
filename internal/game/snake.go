@@ -90,7 +90,7 @@ func (g *SnakeGame) Resize(width int, height int) ResizeResult {
 		g.Snake = []Point{{X: width / 2, Y: height / 2}}
 		g.Dir = DirectionRight
 		g.PendingDirs = nil
-		g.placeFoodAfterResize()
+		g.placeFoodIfInvalid()
 		return ResizeReflowed
 	}
 	if width*height < len(g.Snake) {
@@ -121,7 +121,7 @@ func (g *SnakeGame) Resize(width int, height int) ResizeResult {
 	if result != ResizeUnchanged {
 		g.Dir = safeDirection(g.Dir, g.Snake, width, height)
 	}
-	g.placeFoodAfterResize()
+	g.placeFoodIfInvalid()
 	return result
 }
 
@@ -202,6 +202,7 @@ func (g *SnakeGame) step(forceGrow bool) StepResult {
 	}
 
 	g.Snake = g.Snake[:len(g.Snake)-1]
+	g.placeFoodIfInvalid()
 	return StepMoved
 }
 
@@ -253,7 +254,7 @@ func (g *SnakeGame) Occupies(point Point) bool {
 	return false
 }
 
-func (g *SnakeGame) placeFoodAfterResize() {
+func (g *SnakeGame) placeFoodIfInvalid() {
 	if g.FoodValid(nil) {
 		return
 	}

@@ -34,6 +34,7 @@ Options:
   -h, --help       Show this help text.
   -v, --version    Show the sidequest version.
   --mode <mode>    Select game mode: classic or quest.
+  --no-history     Do not persist command-pane output after the run.
 
 The -- separator marks the end of Sidequest options and the start of the
 command to run. Command arguments are preserved exactly and are not passed
@@ -49,6 +50,7 @@ type Config struct {
 	Executable string
 	Arguments  []string
 	Mode       string
+	NoHistory  bool
 }
 
 type Result struct {
@@ -194,6 +196,7 @@ func (a App) Run(args []string) int {
 		if runtimeSession.StatePath != "" {
 			if err := session.UpdateState(runtimeSession, a.now(), func(state *session.State) {
 				state.GameMode = result.Config.Mode
+				state.NoHistory = result.Config.NoHistory
 			}); err != nil {
 				fmt.Fprintf(a.errorWriter(), "sidequest: %v\n", err)
 				return 2
@@ -215,6 +218,7 @@ func Parse(args []string) (Result, error) {
 	}
 
 	mode := game.GameModeClassic
+	noHistory := false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		switch arg {
@@ -232,8 +236,10 @@ func Parse(args []string) (Result, error) {
 			}
 			mode = selectedMode
 			index++
+		case "--no-history":
+			noHistory = true
 		case "--":
-			return parseCommand(args[index+1:], mode)
+			return parseCommand(args[index+1:], mode, noHistory)
 		default:
 			if strings.HasPrefix(arg, "--mode=") {
 				selectedMode, err := parseMode(strings.TrimPrefix(arg, "--mode="))
@@ -265,7 +271,7 @@ func Usage() string {
 	return usage
 }
 
-func parseCommand(args []string, mode string) (Result, error) {
+func parseCommand(args []string, mode string, noHistory bool) (Result, error) {
 	if len(args) == 0 || args[0] == "" {
 		return Result{}, ErrMissingCommand
 	}
@@ -275,6 +281,7 @@ func parseCommand(args []string, mode string) (Result, error) {
 			Executable: args[0],
 			Arguments:  append([]string(nil), args[1:]...),
 			Mode:       mode,
+			NoHistory:  noHistory,
 		},
 	}, nil
 }
@@ -602,15 +609,19 @@ func (a App) cleanupClosedSession(record session.Record) error {
 
 	if info, ok := ownedInfoFromRecord(record); ok {
 		if a.tmuxHasSession(info) {
-			output, truncated, err := a.captureCommandPane(info)
-			if err != nil {
-				return err
+			if record.State.NoHistory {
+				a.printHistoryDisabled(record.Session)
+			} else {
+				output, truncated, err := a.captureCommandPane(info)
+				if err != nil {
+					return err
+				}
+				run, err := a.storeRun(record, output, truncated)
+				if err != nil {
+					return err
+				}
+				a.printStoredRun(run)
 			}
-			run, err := a.storeRun(record, output, truncated)
-			if err != nil {
-				return err
-			}
-			a.printStoredRun(run)
 		}
 		if err := a.closeTmux(info); err != nil {
 			return err
@@ -630,6 +641,10 @@ func (a App) printStoredRun(run runhistory.Run) {
 	fmt.Fprintf(a.outputWriter(), "Saved output: %s\n", run.OutputPath)
 	fmt.Fprintf(a.outputWriter(), "View it with: sidequest output %s\n", run.Result.ID)
 	fmt.Fprintf(a.outputWriter(), "Metadata: sidequest show %s\n", run.Result.ID)
+}
+
+func (a App) printHistoryDisabled(runtimeSession session.Session) {
+	fmt.Fprintf(a.outputWriter(), "History disabled: no command output saved for run %s\n", runtimeSession.ID)
 }
 
 func (a App) captureCommandPane(info tmux.Info) (string, bool, error) {

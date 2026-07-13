@@ -82,6 +82,46 @@ func TestSnakeUsesConfiguredFoodScore(t *testing.T) {
 	}
 }
 
+func TestSnakeRetriesMissingFoodAfterMovement(t *testing.T) {
+	game := NewSnakeGame(2, 2, func(int) int { return 0 })
+	game.Snake = []Point{{X: 0, Y: 0}, {X: 0, Y: 1}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: -1, Y: -1}
+
+	result := game.Step()
+
+	if result != StepMoved {
+		t.Fatalf("Step result = %v, want %v", result, StepMoved)
+	}
+	if !game.FoodValid(nil) {
+		t.Fatalf("Food = %#v, want valid food after movement freed space", game.Food)
+	}
+}
+
+func TestSnakeRetriesMissingFoodAfterResize(t *testing.T) {
+	game := NewSnakeGame(1, 1, func(int) int { return 0 })
+	game.Food = Point{X: -1, Y: -1}
+
+	game.Resize(2, 1)
+
+	if !game.FoodValid(nil) {
+		t.Fatalf("Food = %#v, want valid food after resize freed space", game.Food)
+	}
+}
+
+func TestSnakeRetriesMissingFoodAfterRecover(t *testing.T) {
+	game := NewSnakeGame(2, 1, func(int) int { return 0 })
+	game.Snake = []Point{{X: 0, Y: 0}, {X: 1, Y: 0}}
+	game.Food = Point{X: -1, Y: -1}
+	game.Over = true
+
+	game.Recover()
+
+	if !game.FoodValid(nil) {
+		t.Fatalf("Food = %#v, want valid food after recovery reset the snake", game.Food)
+	}
+}
+
 func TestSnakeEndsRoundOnWallCollision(t *testing.T) {
 	game := NewSnakeGame(3, 3, func(int) int { return 0 })
 	game.Snake = []Point{{X: 2, Y: 1}}

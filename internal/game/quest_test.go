@@ -1,6 +1,7 @@
 package game
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -299,6 +300,45 @@ func TestQuestTimedEffectsRefreshAndExpire(t *testing.T) {
 	}
 }
 
+func TestQuestEffectHUDPartsSeparatesChargesAndDuration(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.Shield = TimedCharge{Charges: 1, ExpiresAt: now.Add(29 * time.Second)}
+	quest.Phase = TimedCharge{Charges: 1, ExpiresAt: now.Add(14 * time.Second)}
+	quest.Warp = TimedCharge{Charges: 1, ExpiresAt: now.Add(22 * time.Second)}
+	quest.DoubleCharges = 3
+	quest.DoubleUntil = now.Add(18 * time.Second)
+
+	got := quest.effectHUDParts(now)
+	want := []string{
+		"SHIELD x1 29s",
+		"PHASE x1 14s",
+		"WARP x1 22s",
+		"DOUBLE x3 18s",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("effectHUDParts = %#v, want %#v", got, want)
+	}
+}
+
+func TestQuestEffectHUDPartsKeepsDurationOnlyEffectsReadable(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
+	quest.SlowUntil = now.Add(11 * time.Second)
+	quest.ComboKeeperUntil = now.Add(17 * time.Second)
+	quest.TurboUntil = now.Add(9 * time.Second)
+
+	got := quest.effectHUDParts(now)
+	want := []string{
+		"SLOW 11s",
+		"COMBO LOCK 17s",
+		"TURBO 9s",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("effectHUDParts = %#v, want %#v", got, want)
+	}
+}
+
 func TestQuestComboKeeperFreezesComboExpiry(t *testing.T) {
 	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
 	game := NewSnakeGame(8, 8, func(int) int { return 0 })
@@ -513,6 +553,26 @@ func TestStepGameCollectsPickupWithoutBlockingMovement(t *testing.T) {
 
 	if result != StepMoved || game.Snake[0] != (Point{X: 4, Y: 3}) || quest.Pickup.Active || quest.Shield.Charges != 1 {
 		t.Fatalf("pickup collection result=%v head=%#v pickup=%#v shield=%#v", result, game.Snake[0], quest.Pickup, quest.Shield)
+	}
+}
+
+func TestStepGameRetriesMissingFoodAfterQuestMovement(t *testing.T) {
+	now := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	game := NewSnakeGame(4, 3, func(int) int { return 0 })
+	game.Snake = []Point{{X: 1, Y: 1}, {X: 0, Y: 1}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: -1, Y: -1}
+	quest := NewQuestState(GameModeQuest, now, fixedRandom(0), 4, 3)
+	quest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeShield, Position: Point{X: 2, Y: 2}, ExpiresAt: now.Add(pickupTTL)}
+	quest.Golden = GoldenByte{Active: true, Position: Point{X: 3, Y: 2}, ExpiresAt: now.Add(goldenByteTTL)}
+
+	result := stepGame(game, quest, HeatByLevel(1), now)
+
+	if result != StepMoved {
+		t.Fatalf("stepGame result = %v, want movement", result)
+	}
+	if !game.FoodValid(quest.ActiveObjectPoints()) {
+		t.Fatalf("Food = %#v, want valid food excluding quest objects pickup=%#v golden=%#v", game.Food, quest.Pickup.Position, quest.Golden.Position)
 	}
 }
 

@@ -61,7 +61,9 @@ normal Snake movement.
 Finished runs keep visible command-pane output locally under
 .IR "${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/" .
 Sidequest stores result metadata and pane output, but not the command or
-argument list.
+argument list. Use
+.B \-\-no-history
+for sensitive commands whose output should not be persisted.
 .PP
 Commands are executed directly. Arguments after
 .B --
@@ -78,6 +80,11 @@ Show the Sidequest version.
 Select the Snake mode. Classic keeps Snake with Command Heat only. Quest adds
 combo scoring, Golden Bytes, one mission, random arena pickups, completion
 bonuses and local game statistics.
+.TP
+.B \-\-no-history
+Do not capture or persist command-pane output when the Sidequest session is
+closed. No stored run metadata or output file is created for that run. The live
+tmux pane scrollback remains visible until the session is closed.
 .SH COMMANDS
 .TP
 .B list
@@ -171,7 +178,10 @@ Installed manual page.
 .TP
 .I ${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/runs/
 Local stored run history. Captured terminal output may contain sensitive data
-such as tokens, environment values, file contents or application data.
+such as tokens, environment values, file contents or application data. Runs
+started with
+.B \-\-no-history
+are not written here.
 .TP
 .I ${XDG_STATE_HOME:-$HOME/.local/state}/sidequest/game-stats.json
 Local game statistics, achievements, and Classic/Quest TOP 5 lists. This file

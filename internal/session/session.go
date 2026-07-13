@@ -54,6 +54,7 @@ type State struct {
 	StartError     string     `json:"start_error,omitempty"`
 	TmuxSocket     string     `json:"tmux_socket,omitempty"`
 	GameMode       string     `json:"game_mode,omitempty"`
+	NoHistory      bool       `json:"no_history,omitempty"`
 }
 
 type Manager struct {
