@@ -441,6 +441,9 @@ func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time)
 		return result
 	}
 	result := game.Step()
+	if result == StepMoved && quest.Enabled() {
+		quest.EnsureFood(game)
+	}
 	if result == StepAteFood && quest.Enabled() {
 		quest.OnNormalFood(game, heat, now)
 		quest.EnsureFood(game)
