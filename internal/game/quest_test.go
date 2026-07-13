@@ -325,8 +325,11 @@ func TestQuestTimedEffectsRefreshAndExpire(t *testing.T) {
 	turboQuest := NewQuestState(GameModeQuest, now, fixedRandom(0), 8, 8)
 	turboQuest.Pickup = UpgradePickup{Active: true, Upgrade: UpgradeTurbo, ExpiresAt: now.Add(pickupTTL)}
 	turboQuest.OnPickupCollected(game, HeatByLevel(1), now)
-	if got := turboQuest.EffectiveInterval(100*time.Millisecond, now.Add(time.Second)); got < turboMinimumSpeed || got >= 100*time.Millisecond {
-		t.Fatalf("turbo interval = %s, want faster but safe", got)
+	if got := turboQuest.EffectiveInterval(180*time.Millisecond, now.Add(time.Second)); got != 117*time.Millisecond {
+		t.Fatalf("turbo interval = %s, want noticeable speed boost", got)
+	}
+	if got := turboQuest.EffectiveInterval(80*time.Millisecond, now.Add(time.Second)); got != turboMinimumSpeed {
+		t.Fatalf("turbo capped interval = %s, want %s", got, turboMinimumSpeed)
 	}
 	turboQuest.Tick(game, HeatByLevel(1), now.Add(turboDuration))
 	if !turboQuest.TurboUntil.IsZero() {

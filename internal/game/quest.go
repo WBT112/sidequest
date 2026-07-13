@@ -31,7 +31,8 @@ const (
 	maxComboBonusUnit   = 100
 	maxHeatBonusUnit    = 100
 	normalMinimumSpeed  = 180 * time.Millisecond
-	turboMinimumSpeed   = 70 * time.Millisecond
+	turboMinimumSpeed   = 55 * time.Millisecond
+	turboSpeedPermille  = 650
 	turboScorePermille  = 1250
 	doubleScoreCharges  = 3
 	doubleScoreCap      = 6
@@ -359,7 +360,7 @@ func (q *QuestState) EffectiveInterval(base time.Duration, now time.Time) time.D
 		}
 	}
 	if !q.TurboUntil.IsZero() && now.Before(q.TurboUntil) {
-		interval = interval * 85 / 100
+		interval = interval * turboSpeedPermille / 1000
 		if interval < turboMinimumSpeed {
 			interval = turboMinimumSpeed
 		}
