@@ -7,7 +7,7 @@ Look no further!
 
 Sidequest runs your command in one tmux pane and focuses a small Snake game in another.
 The command stays visible, so you can follow what's happening while you play. Now with Boss-Key(F9).
-You also get noticed when the command finishes. By default, command-pane output is stored for later review; use `--no-history` for sensitive commands.
+You also get noticed when the command finishes. By default, command-pane output is stored for later review, so we could say you're doing some documentation along the way.
 
 ![Sidequest Snake gameplay](docs/sidequest-moment.gif)
 
