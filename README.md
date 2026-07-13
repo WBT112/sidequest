@@ -7,9 +7,9 @@ Look no further!
 
 Sidequest runs your command in one tmux pane and focuses a small Snake game in another.
 The command stays visible, so you can follow what's happening while you play. Now with Boss-Key(F9).
-You also get noticed when the command finishes. By default, command-pane output is stored for later review; use `--no-history` for sensitive commands.
+You also get noticed when the command finishes. By default, command-pane output is stored for later review, so we could say you're doing some documentation along the way.
 
-![Sidequest Snake gameplay](docs/snake1.png)
+![Sidequest Snake gameplay](docs/sidequest-moment.gif)
 
 ## Contents
 
@@ -21,116 +21,21 @@ You also get noticed when the command finishes. By default, command-pane output 
 
 Sidequest currently supports Linux `amd64` and `arm64`. Windows users should run Sidequest inside WSL 2.
 
-Sidequest requires `tmux` at runtime:
+Install the latest release:
 
 ```bash
-sudo apt install tmux
-sudo dnf install tmux
+curl -fsSL https://github.com/WBT112/sidequest/releases/latest/download/install.sh | sh -s -- --update-path
 ```
 
-### Install From a Release
-
-Choose a release tag, download the versioned installer from GitHub Releases,
-inspect it, then run it:
-
-```bash
-SIDEQUEST_VERSION=v0.2.0
-curl -fsSLO "https://github.com/WBT112/sidequest/releases/download/${SIDEQUEST_VERSION}/install.sh"
-less install.sh
-sh install.sh --update-path
-```
-
-Open a new terminal after installation, or run the reload command printed by the
-installer. The installer detects Bash, Zsh and Fish and falls back to
-`$HOME/.profile` for other shells. Reinstalling does not add the PATH line again.
-
-To install without changing a shell startup file:
-
-```bash
-sh install.sh
-```
-
-The installer downloads the matching GitHub Release archive, verifies
-`checksums.txt`, and installs to `$HOME/.local/bin` by default. Release assets
-also include GitHub artifact attestations. After downloading an artifact, you can
-verify its provenance with:
-
-```bash
-gh attestation verify sidequest_0.2.0_linux_amd64.tar.gz --repo WBT112/sidequest
-gh attestation verify install.sh --repo WBT112/sidequest
-```
-
-Install and run Sidequest without `sudo` by default. Use elevated privileges
-only when you intentionally install into a system directory such as
-`/usr/local/bin`; do not combine `sudo` with `--update-path`.
-
-To install elsewhere:
-
-```bash
-SIDEQUEST_INSTALL_DIR=/usr/local/bin sh install.sh
-```
-
-`--update-path` is limited to the default `$HOME/.local/bin` destination. For a
-custom installation directory, configure PATH yourself or choose a directory
-that is already on PATH.
-
-### Debian/Ubuntu Package
-
-```bash
-sudo apt install ./sidequest_0.1.0_linux_amd64.deb
-sidequest --version
-sudo apt remove sidequest
-```
-
-### Fedora/RHEL Package
-
-```bash
-sudo dnf install ./sidequest_0.1.0_linux_amd64.rpm
-sidequest --version
-sudo dnf remove sidequest
-```
-
-### Windows Via WSL 2
-
-Install and run Sidequest inside a Linux distribution under WSL 2, not from
-PowerShell or `cmd.exe`:
-
-```bash
-sudo apt update
-sudo apt install tmux curl ca-certificates
-SIDEQUEST_VERSION=v0.2.0
-curl -fsSLO "https://github.com/WBT112/sidequest/releases/download/${SIDEQUEST_VERSION}/install.sh"
-less install.sh
-sh install.sh --update-path
-```
-
-Open a new WSL terminal and verify the installation:
+Open a new terminal after installation, then verify:
 
 ```bash
 sidequest --version
 ```
 
-PATH setup happens inside WSL, not in the Windows PATH.
-
-### Build From Source
-
-```bash
-go build -o sidequest ./cmd/sidequest
-```
-
-### Verify
-
-```bash
-command -v sidequest
-sidequest --version
-```
-
-When the installer was run without `--update-path` and `$HOME/.local/bin` is not
-already on PATH, add this line to your shell startup file:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
+Sidequest requires `tmux` at runtime (`sudo apt install tmux` or
+`sudo dnf install tmux`). Release assets also include `.deb` and `.rpm`
+packages for manual installation.
 
 ## Quick Start
 
