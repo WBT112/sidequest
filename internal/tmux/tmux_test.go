@@ -138,9 +138,9 @@ func TestStartBindsCommandPaneScrollKeysOnlyForCommandPane(t *testing.T) {
 	joined := runner.joinedCalls()
 	for _, want := range []string{
 		"bind-key -n PPage if-shell -F #{==:#{pane_index},0} copy-mode -e -u send-keys PPage",
-		"bind-key -n NPage if-shell -F #{==:#{pane_index},0} copy-mode -e ; send-keys -X page-down send-keys NPage",
-		"bind-key -n Up if-shell -F #{==:#{pane_index},0} copy-mode -e ; send-keys -X cursor-up send-keys Up",
-		"bind-key -n Down if-shell -F #{==:#{pane_index},0} copy-mode -e ; send-keys -X cursor-down send-keys Down",
+		"bind-key -n NPage if-shell -F #{==:#{pane_index},0} if-shell -F '#{pane_in_mode}' 'send-keys -X page-down ; if-shell -F \"#{==:#{scroll_position},0}\" \"send-keys -X cancel\"' 'display-message -d 1 \"\"' send-keys NPage",
+		"bind-key -n Up if-shell -F #{==:#{pane_index},0} copy-mode -e ; send-keys -X scroll-up send-keys Up",
+		"bind-key -n Down if-shell -F #{==:#{pane_index},0} if-shell -F '#{pane_in_mode}' 'send-keys -X scroll-down ; if-shell -F \"#{==:#{scroll_position},0}\" \"send-keys -X cancel\"' 'display-message -d 1 \"\"' send-keys Down",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("scroll key binding missing %q:\n%s", want, joined)
@@ -288,6 +288,24 @@ func TestCaptureCommandPaneReadsPlainCommandPaneOutput(t *testing.T) {
 		t.Fatal("truncated = true, want false")
 	}
 	want := []string{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "capture-pane", "-p", "-J", "-S", "-100000", "-t", "sidequest-abc123:0.0"}
+	if !equalStrings(runner.outputCalls[0], want) {
+		t.Fatalf("capture call = %#v, want %#v", runner.outputCalls[0], want)
+	}
+}
+
+func TestCaptureCommandPreviewReadsLastVisibleLine(t *testing.T) {
+	runner := &recordingRunner{output: "step one\n\nstep two\n"}
+	layout := Layout{CommandRunner: runner}
+	info := Info{SocketName: "sidequest-abc123", SessionName: "sidequest-abc123"}
+
+	output, err := layout.CaptureCommandPreview(info)
+	if err != nil {
+		t.Fatalf("CaptureCommandPreview returned error: %v", err)
+	}
+	if output != "step two" {
+		t.Fatalf("output = %q, want last non-empty line", output)
+	}
+	want := []string{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "capture-pane", "-p", "-J", "-S", "-20", "-t", "sidequest-abc123:0.0"}
 	if !equalStrings(runner.outputCalls[0], want) {
 		t.Fatalf("capture call = %#v, want %#v", runner.outputCalls[0], want)
 	}

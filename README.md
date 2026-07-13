@@ -44,6 +44,7 @@ sidequest -- ssh deploy@example.com
 sidequest -- sh -c 'sudo du -xh /var /usr /home 2>/dev/null | sort -h'
 sidequest --no-history -- ssh production.example.com
 sidequest --no-color -- make test
+sidequest --aug -- make test
 sidequest --mode quest -- make test
 sidequest -- codex
 sidequest -- claude "Run the test suite, fix any failures, and summarize the changes."
@@ -52,7 +53,7 @@ sidequest -- claude "Run the test suite, fix any failures, and summarize the cha
 Try it with a harmless demo workload:
 
 ```bash
-sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i"; sleep 1; done'
+sidequest --aug -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i"; sleep 1; done'
 ```
 
 ## Gameplay
@@ -63,7 +64,8 @@ sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i";
 - Snake focus-pauses while the command pane is active and resumes when the game
   pane is active again, unless you paused manually.
 - In the command pane, `Page Up` and `Page Down` scroll pages; arrow up and
-  arrow down scroll line by line.
+  arrow down scroll line by line. Scrolling back to the bottom resumes live
+  command output.
 - `F10` detaches back to your shell. If the command is still running, Sidequest
   prints the `sidequest attach <id>` command.
 - `R` restarts Snake after a round over while the command keeps running.
@@ -77,6 +79,9 @@ Heat stays frozen at the reached level while the round can continue.
 
 Quest mode adds combo scoring, one mission per command, Golden Bytes, random
 arena pickups and other stuff.
+
+Use `--aug` to show the latest command output line centered in the game pane
+while the original command pane stays unchanged.
 
 Use `--no-color` or a non-empty `NO_COLOR` environment variable for monochrome
 Sidequest game/UI rendering. Wrapped command output is left untouched.

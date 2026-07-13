@@ -122,6 +122,47 @@ func TestRunDisplaysQuestModeHUD(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
+func TestRunShowsCommandPreview(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	screen.SetSize(80, 20)
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning, Augmented: true}, nil
+		},
+		ReadCommandPreview: func() (string, error) {
+			return "working step 12/60", nil
+		},
+		PollInterval: time.Hour,
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "CMD working step 12/60")
+	cancelShell(t, cancel, errc)
+}
+
+func TestCommandPreviewRequiresAugmentedState(t *testing.T) {
+	called := false
+	shell := Shell{
+		ReadCommandPreview: func() (string, error) {
+			called = true
+			return "hidden", nil
+		},
+	}
+	view := viewState{State: session.State{Status: session.StatusRunning}}
+
+	if changed := shell.syncCommandPreview(&view); changed {
+		t.Fatal("syncCommandPreview changed view without augmented state")
+	}
+	if called {
+		t.Fatal("ReadCommandPreview called without augmented state")
+	}
+	if view.CommandPreview != "" {
+		t.Fatalf("CommandPreview = %q, want empty", view.CommandPreview)
+	}
+}
+
 func TestRenderCentersQuestHUDLines(t *testing.T) {
 	screen := tcell.NewSimulationScreen("")
 	if err := screen.Init(); err != nil {
@@ -162,6 +203,35 @@ func TestRenderCentersQuestHUDLines(t *testing.T) {
 		if got != want {
 			t.Fatalf("row %d start column = %d, want %d for %q", test.y, got, want, test.text)
 		}
+	}
+}
+
+func TestRenderCentersCommandPreviewInCommandLine(t *testing.T) {
+	screen := tcell.NewSimulationScreen("")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	defer screen.Fini()
+
+	width, height := 100, 20
+	screen.SetSize(width, height)
+
+	view := viewState{
+		SessionState:   session.StatusRunning,
+		Heat:           HeatByLevel(1),
+		CommandPreview: formatCommandPreview("working step 12/60"),
+	}
+
+	render(screen, view)
+
+	text := "CMD working step 12/60"
+	got := rowTextIndex(screen, 1, text)
+	if got < 0 {
+		t.Fatalf("row 1 missing %q:\n%s", text, screenText(screen))
+	}
+	want := 1 + ((width - 2 - textDisplayWidth(text)) / 2)
+	if got != want {
+		t.Fatalf("preview start column = %d, want %d", got, want)
 	}
 }
 

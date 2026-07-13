@@ -56,6 +56,7 @@ type State struct {
 	GameMode       string     `json:"game_mode,omitempty"`
 	NoHistory      bool       `json:"no_history,omitempty"`
 	NoColor        bool       `json:"no_color,omitempty"`
+	Augmented      bool       `json:"augmented,omitempty"`
 }
 
 type Manager struct {

@@ -40,6 +40,7 @@ type Info struct {
 }
 
 const commandPaneHistoryLimit = 100000
+const commandPanePreviewLines = 20
 
 const (
 	bossHiddenOption    = "@sidequest_boss_hidden"
@@ -154,10 +155,17 @@ type commandPaneScrollBinding struct {
 func commandPaneScrollBindings() []commandPaneScrollBinding {
 	return []commandPaneScrollBinding{
 		{key: "PPage", command: "copy-mode -e -u"},
-		{key: "NPage", command: "copy-mode -e ; send-keys -X page-down"},
-		{key: "Up", command: "copy-mode -e ; send-keys -X cursor-up"},
-		{key: "Down", command: "copy-mode -e ; send-keys -X cursor-down"},
+		{key: "NPage", command: copyModeScrollDownCommand("page-down")},
+		{key: "Up", command: "copy-mode -e ; send-keys -X scroll-up"},
+		{key: "Down", command: copyModeScrollDownCommand("scroll-down")},
 	}
+}
+
+func copyModeScrollDownCommand(command string) string {
+	return fmt.Sprintf(
+		"if-shell -F '#{pane_in_mode}' 'send-keys -X %s ; if-shell -F \"#{==:#{scroll_position},0}\" \"send-keys -X cancel\"' 'display-message -d 1 \"\"'",
+		command,
+	)
 }
 
 func bossHideCommand(info Info) string {
@@ -331,6 +339,47 @@ func (l Layout) CaptureCommandPane(info Info) (string, bool, error) {
 	text := string(output)
 	truncated := strings.Count(text, "\n") >= commandPaneHistoryLimit
 	return text, truncated, nil
+}
+
+func (l Layout) CaptureCommandPreview(info Info) (string, error) {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = quietRunner()
+	}
+	outputRunner, ok := runner.(OutputRunner)
+	if !ok {
+		return "", fmt.Errorf("tmux runner cannot capture output")
+	}
+
+	output, err := outputRunner.Output(
+		tmuxPath,
+		"-f", "/dev/null",
+		"-L", info.SocketName,
+		"capture-pane",
+		"-p",
+		"-J",
+		"-S", fmt.Sprintf("-%d", commandPanePreviewLines),
+		"-t", info.SessionName+":0.0",
+	)
+	if err != nil {
+		return "", fmt.Errorf("capture command preview: %w", err)
+	}
+	return lastCommandPreviewLine(string(output)), nil
+}
+
+func lastCommandPreviewLine(output string) string {
+	lines := strings.Split(output, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := strings.TrimSpace(lines[index])
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func (l Layout) HasSession(info Info) bool {

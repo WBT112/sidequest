@@ -85,6 +85,19 @@ func TestParseNoColorFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestParseAugmentedBeforeSeparator(t *testing.T) {
+	result, err := Parse([]string{"--aug", "--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !result.Config.Augmented {
+		t.Fatal("Augmented = false, want true")
+	}
+	if result.Config.Executable != "sleep" {
+		t.Fatalf("Executable = %q, want sleep", result.Config.Executable)
+	}
+}
+
 func TestParseRejectsUnknownMode(t *testing.T) {
 	_, err := Parse([]string{"--mode", "arena", "--", "true"})
 	if err == nil || !strings.Contains(err.Error(), "unknown mode") {
@@ -160,7 +173,7 @@ func TestRunHelpDocumentsSeparator(t *testing.T) {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
 
-	for _, want := range []string{"sidequest [options] -- <command> [arguments...]", "--no-history", "--no-color"} {
+	for _, want := range []string{"sidequest [options] -- <command> [arguments...]", "--no-history", "--no-color", "--aug"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help output missing %q:\n%s", want, out.String())
 		}
@@ -221,6 +234,37 @@ func TestRunCommandStoresNoColorChoice(t *testing.T) {
 	}
 
 	code := app.Run([]string{"--no-color", "--", "true"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+}
+
+func TestRunCommandStoresAugmentedChoice(t *testing.T) {
+	var out bytes.Buffer
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("augmented")}
+	app := App{
+		Out:       &out,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			return manager.Create()
+		},
+		RunLayout: func(gotSession session.Session, gotCommand session.Command) error {
+			state, err := session.ReadState(gotSession)
+			if err != nil {
+				t.Fatalf("ReadState returned error: %v", err)
+			}
+			if !state.Augmented {
+				t.Fatal("Augmented = false, want true")
+			}
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"--aug", "--", "true"})
 	if code != 0 {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
@@ -428,6 +472,9 @@ func TestRunGameShellConfiguresProductionRandomSource(t *testing.T) {
 	}
 	if captured.ReadFocus == nil {
 		t.Fatal("game shell ReadFocus = nil")
+	}
+	if captured.ReadCommandPreview == nil {
+		t.Fatal("game shell ReadCommandPreview = nil")
 	}
 }
 

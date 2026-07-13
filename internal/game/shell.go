@@ -18,6 +18,7 @@ const focusPollInterval = 100 * time.Millisecond
 
 type StateReader func() (session.State, error)
 type FocusReader func() (bool, error)
+type CommandPreviewReader func() (string, error)
 
 type CommandCompletionChoice int
 
@@ -78,15 +79,16 @@ func (c PlayClock) Elapsed(now time.Time) time.Duration {
 }
 
 type Shell struct {
-	NewScreen      func() (tcell.Screen, error)
-	ReadState      StateReader
-	ReadFocus      FocusReader
-	OnQuitTerminal func() error
-	Random         RandomSource
-	StatsManager   StatsManager
-	PollInterval   time.Duration
-	GameInterval   time.Duration
-	Now            func() time.Time
+	NewScreen          func() (tcell.Screen, error)
+	ReadState          StateReader
+	ReadFocus          FocusReader
+	ReadCommandPreview CommandPreviewReader
+	OnQuitTerminal     func() error
+	Random             RandomSource
+	StatsManager       StatsManager
+	PollInterval       time.Duration
+	GameInterval       time.Duration
+	Now                func() time.Time
 }
 
 type viewState struct {
@@ -120,6 +122,7 @@ type viewState struct {
 	PendingScore    *PendingHighscore
 	StatsMessage    string
 	Completion      CommandCompletionChoice
+	CommandPreview  string
 }
 
 type PendingHighscore struct {
@@ -189,6 +192,7 @@ func (s Shell) Run(ctx context.Context) error {
 		Quest:        NewQuestState(mode, gameEpoch, s.Random, boardWidth, boardHeight),
 	}
 	s.syncFocus(&view, now, true)
+	s.syncCommandPreview(&view)
 	s.syncPlayClock(&view, now)
 	updateViewGameTime(&view, now)
 	updateViewHeat(&view, now)
@@ -419,6 +423,7 @@ func (s Shell) Run(ctx context.Context) error {
 				}
 			}
 			updateViewHeat(&view, s.now())
+			s.syncCommandPreview(&view)
 			render(screen, view)
 		}
 	}
@@ -746,6 +751,29 @@ func (s Shell) syncFocus(view *viewState, now time.Time, force bool) (changed bo
 	return true, !nextFocusPause
 }
 
+func (s Shell) syncCommandPreview(view *viewState) bool {
+	if !view.State.Augmented {
+		if view.CommandPreview == "" {
+			return false
+		}
+		view.CommandPreview = ""
+		return true
+	}
+	if s.ReadCommandPreview == nil {
+		return false
+	}
+	preview, err := s.ReadCommandPreview()
+	if err != nil {
+		preview = ""
+	}
+	preview = formatCommandPreview(preview)
+	if preview == view.CommandPreview {
+		return false
+	}
+	view.CommandPreview = preview
+	return true
+}
+
 func (s Shell) syncPlayClock(view *viewState, now time.Time) (started bool, stopped bool) {
 	if canRunPlayClock(*view) {
 		return view.Clock.Start(now), false
@@ -812,9 +840,13 @@ func render(screen tcell.Screen, view viewState) {
 	drawBox(screen, 0, 0, width, height, style)
 	drawPlayfield(screen, style, view.NoColor)
 
+	commandLine := "Command state: " + displayState(view.SessionState)
+	if view.CommandPreview != "" {
+		commandLine = view.CommandPreview
+	}
 	lines := []renderLine{
 		{y: 0, text: "Sidequest Snake [" + gameModeLabel(view) + "]", style: titleStyle, centered: true},
-		{y: 1, text: "Command state: " + displayState(view.SessionState), style: statusStyle, centered: true},
+		{y: 1, text: commandLine, style: statusStyle, centered: true},
 		{y: 2, text: heatScoreLine(view), style: scoreStyle, centered: true},
 		{y: 3, text: statusLine(view), style: secondaryStyle, centered: true},
 	}
@@ -845,6 +877,14 @@ func render(screen tcell.Screen, view viewState) {
 	}
 
 	screen.Show()
+}
+
+func formatCommandPreview(preview string) string {
+	preview = strings.TrimSpace(preview)
+	if preview == "" {
+		return ""
+	}
+	return "CMD " + preview
 }
 
 type renderLine struct {
