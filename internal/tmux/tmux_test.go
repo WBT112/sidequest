@@ -74,6 +74,34 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 	}
 }
 
+func TestStartSeedsDetachedSessionWithCurrentTerminalSize(t *testing.T) {
+	runner := &recordingRunner{}
+	layout := Layout{
+		CommandRunner: runner,
+		TerminalSize: func() (int, int, error) {
+			return 132, 43, nil
+		},
+	}
+	runtimeSession := session.Session{ID: "sized", SocketPath: "/tmp/sidequest-1000/sized/command.sock"}
+
+	if _, err := layout.Start(
+		runtimeSession,
+		[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+		[]string{"/usr/bin/sidequest", "__sidequest-game", "/tmp/sidequest-1000/sized/state.json"},
+	); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	want := []string{
+		"tmux", "-f", "/dev/null", "-L", "sidequest-sized",
+		"new-session", "-d", "-x", "132", "-y", "43",
+		"-s", "sidequest-sized", "-n", "sidequest",
+	}
+	if !hasPrefix(runner.calls[0], want) {
+		t.Fatalf("new-session call = %#v, want prefix %#v", runner.calls[0], want)
+	}
+}
+
 func TestStartConfiguresEnhancedPaneFocusFormatting(t *testing.T) {
 	runner := &recordingRunner{}
 	layout := Layout{CommandRunner: runner}

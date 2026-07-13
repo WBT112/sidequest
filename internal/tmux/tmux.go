@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
+	"github.com/WBT112/sidequest/internal/preflight"
 	"github.com/WBT112/sidequest/internal/session"
 )
 
@@ -26,7 +28,10 @@ type ExecRunner struct {
 type Layout struct {
 	TmuxPath      string
 	CommandRunner Runner
+	TerminalSize  TerminalSizeReader
 }
+
+type TerminalSizeReader func() (columns int, rows int, err error)
 
 type BossState struct {
 	Hidden            bool
@@ -94,7 +99,12 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	}
 	ui := uiPresetForSession(runtimeSession)
 
-	if err := run("new-session", "-d", "-s", info.SessionName, "-n", "sidequest", shellJoin(commandRunner)); err != nil {
+	newSessionArgs := []string{"new-session", "-d"}
+	if columns, rows, err := l.currentTerminalSize(); err == nil && columns > 0 && rows > 0 {
+		newSessionArgs = append(newSessionArgs, "-x", strconv.Itoa(columns), "-y", strconv.Itoa(rows))
+	}
+	newSessionArgs = append(newSessionArgs, "-s", info.SessionName, "-n", "sidequest", shellJoin(commandRunner))
+	if err := run(newSessionArgs...); err != nil {
 		return Info{}, fmt.Errorf("create tmux session: %w", err)
 	}
 
@@ -169,6 +179,18 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	}
 
 	return info, nil
+}
+
+func (l Layout) currentTerminalSize() (columns int, rows int, err error) {
+	if l.TerminalSize != nil {
+		return l.TerminalSize()
+	}
+	env := preflight.DefaultEnvironment()
+	size, err := env.TerminalSize(env.StdoutFD)
+	if err != nil {
+		return 0, 0, err
+	}
+	return size.Columns, size.Rows, nil
 }
 
 type commandPaneScrollBinding struct {
