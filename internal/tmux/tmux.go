@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/WBT112/sidequest/internal/preflight"
 	"github.com/WBT112/sidequest/internal/session"
 )
 
@@ -27,7 +28,10 @@ type ExecRunner struct {
 type Layout struct {
 	TmuxPath      string
 	CommandRunner Runner
+	TerminalSize  TerminalSizeReader
 }
+
+type TerminalSizeReader func() (columns int, rows int, err error)
 
 type BossState struct {
 	Hidden            bool
@@ -40,17 +44,28 @@ type Info struct {
 }
 
 const commandPaneHistoryLimit = 100000
+const commandPanePreviewLines = 20
 
 const (
 	bossHiddenOption    = "@sidequest_boss_hidden"
 	bossPrevGameOption  = "@sidequest_boss_prev_game"
+	gamePausedOption    = "@sidequest_game_paused"
+	commandStatusOption = "@sidequest_command_status"
+	commandExitOption   = "@sidequest_command_exit"
 	bossContinueMessage = "F9 Continue"
 )
 
 const (
 	paneBorderStatus      = "top"
+	paneBorderLines       = "single"
 	paneBorderStyle       = "fg=colour244"
-	paneActiveBorderStyle = "fg=brightwhite,bold"
+	paneActiveBorderStyle = "fg=cyan,bold"
+	monoPaneBorderStyle   = "default"
+	monoActiveBorderStyle = "bold,reverse"
+	commandPaneTitle      = "COMMAND"
+	gamePaneTitle         = "SNAKE"
+	remainOnExitFormat    = "Command finished - F12 Snake - F10 Shell"
+	fullTitleMinWidth     = 72
 )
 
 func (l Layout) Start(runtimeSession session.Session, commandRunner []string, gameRunner []string) (Info, error) {
@@ -79,8 +94,17 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	run := func(args ...string) error {
 		return runner.Run(tmuxPath, append(baseArgs, args...)...)
 	}
+	runOptional := func(args ...string) {
+		_ = run(args...)
+	}
+	ui := uiPresetForSession(runtimeSession)
 
-	if err := run("new-session", "-d", "-s", info.SessionName, "-n", "sidequest", shellJoin(commandRunner)); err != nil {
+	newSessionArgs := []string{"new-session", "-d"}
+	if columns, rows, err := l.currentTerminalSize(); err == nil && columns > 0 && rows > 0 {
+		newSessionArgs = append(newSessionArgs, "-x", strconv.Itoa(columns), "-y", strconv.Itoa(rows))
+	}
+	newSessionArgs = append(newSessionArgs, "-s", info.SessionName, "-n", "sidequest", shellJoin(commandRunner))
+	if err := run(newSessionArgs...); err != nil {
 		return Info{}, fmt.Errorf("create tmux session: %w", err)
 	}
 
@@ -92,33 +116,46 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("set-option", "-t", info.SessionName, "status", "off"); err != nil {
 		return cleanup(fmt.Errorf("disable tmux status bar: %w", err))
 	}
+	if err := run("set-option", "-t", info.SessionName, "prefix", "None"); err != nil {
+		return cleanup(fmt.Errorf("disable tmux prefix: %w", err))
+	}
+	if err := run("set-option", "-t", info.SessionName, "prefix2", "None"); err != nil {
+		return cleanup(fmt.Errorf("disable tmux secondary prefix: %w", err))
+	}
 	if err := run("set-option", "-t", info.SessionName, "history-limit", fmt.Sprintf("%d", commandPaneHistoryLimit)); err != nil {
 		return cleanup(fmt.Errorf("set command pane history limit: %w", err))
 	}
 	if err := run("set-option", "-t", info.SessionName, "pane-border-status", paneBorderStatus); err != nil {
 		return cleanup(fmt.Errorf("enable pane titles: %w", err))
 	}
-	if err := run("set-option", "-t", info.SessionName, "pane-border-format", paneBorderFormat()); err != nil {
+	runOptional("set-option", "-t", info.SessionName, "pane-border-lines", paneBorderLines)
+	if err := run("set-option", "-t", info.SessionName, "pane-border-format", paneBorderFormat(ui)); err != nil {
 		return cleanup(fmt.Errorf("configure pane titles: %w", err))
 	}
-	if err := run("set-option", "-t", info.SessionName, "pane-border-style", paneBorderStyle); err != nil {
+	if err := run("set-option", "-t", info.SessionName, "pane-border-style", ui.paneBorderStyle()); err != nil {
 		return cleanup(fmt.Errorf("configure inactive pane border style: %w", err))
 	}
-	if err := run("set-option", "-t", info.SessionName, "pane-active-border-style", paneActiveBorderStyle); err != nil {
+	if err := run("set-option", "-t", info.SessionName, "pane-active-border-style", ui.paneActiveBorderStyle()); err != nil {
 		return cleanup(fmt.Errorf("configure active pane border style: %w", err))
 	}
-	if err := run("select-pane", "-t", info.SessionName+":0.0", "-T", "Command - F9 hide, F12 Snake, F10 shell"); err != nil {
+	if err := run("select-pane", "-t", info.SessionName+":0.0", "-T", commandPaneTitle); err != nil {
 		return cleanup(fmt.Errorf("title command pane: %w", err))
+	}
+	if err := run("set-option", "-q", "-t", info.SessionName, gamePausedOption, "0"); err != nil {
+		return cleanup(fmt.Errorf("initialize game pane state: %w", err))
+	}
+	if err := run("set-option", "-q", "-t", info.SessionName, commandStatusOption, session.StatusRunning); err != nil {
+		return cleanup(fmt.Errorf("initialize command pane state: %w", err))
+	}
+	if err := run("set-option", "-q", "-t", info.SessionName, commandExitOption, ""); err != nil {
+		return cleanup(fmt.Errorf("initialize command pane exit code: %w", err))
 	}
 	if err := run("set-option", "-t", info.SessionName, "remain-on-exit", "on"); err != nil {
 		return cleanup(fmt.Errorf("enable command pane remain-on-exit: %w", err))
 	}
+	runOptional("set-option", "-t", info.SessionName, "remain-on-exit-format", remainOnExitFormat)
 	if err := run("split-window", "-v", "-l", "16", "-t", info.SessionName+":0.0", shellJoin(gameRunner)); err != nil {
 		return cleanup(fmt.Errorf("create placeholder pane: %w", err))
-	}
-	gamePaneTitle := "Snake - arrows/WASD, F9 hide, F12 Command, F10 shell"
-	if outputRunner, ok := runner.(OutputRunner); ok {
-		gamePaneTitle = centeredPaneTitle(outputRunner, tmuxPath, baseArgs, info.SessionName+":0.1", gamePaneTitle)
 	}
 	if err := run("select-pane", "-t", info.SessionName+":0.1", "-T", gamePaneTitle); err != nil {
 		return cleanup(fmt.Errorf("title game pane: %w", err))
@@ -132,11 +169,49 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("bind-key", "-n", "F9", "if-shell", "-F", "#{==:#{"+bossHiddenOption+"},1}", bossRestoreCommand(info), bossHideCommand(info)); err != nil {
 		return cleanup(fmt.Errorf("bind F9 boss key: %w", err))
 	}
+	for _, binding := range commandPaneScrollBindings() {
+		if err := run("bind-key", "-n", binding.key, "if-shell", "-F", "#{==:#{pane_index},0}", binding.command, "send-keys "+binding.key); err != nil {
+			return cleanup(fmt.Errorf("bind command pane scroll key %s: %w", binding.key, err))
+		}
+	}
 	if err := run("select-pane", "-t", info.SessionName+":0.1"); err != nil {
 		return cleanup(fmt.Errorf("focus game pane: %w", err))
 	}
 
 	return info, nil
+}
+
+func (l Layout) currentTerminalSize() (columns int, rows int, err error) {
+	if l.TerminalSize != nil {
+		return l.TerminalSize()
+	}
+	env := preflight.DefaultEnvironment()
+	size, err := env.TerminalSize(env.StdoutFD)
+	if err != nil {
+		return 0, 0, err
+	}
+	return size.Columns, size.Rows, nil
+}
+
+type commandPaneScrollBinding struct {
+	key     string
+	command string
+}
+
+func commandPaneScrollBindings() []commandPaneScrollBinding {
+	return []commandPaneScrollBinding{
+		{key: "PPage", command: "copy-mode -e -u"},
+		{key: "NPage", command: copyModeScrollDownCommand("page-down")},
+		{key: "Up", command: "copy-mode -e ; send-keys -X scroll-up"},
+		{key: "Down", command: copyModeScrollDownCommand("scroll-down")},
+	}
+}
+
+func copyModeScrollDownCommand(command string) string {
+	return fmt.Sprintf(
+		"if-shell -F '#{pane_in_mode}' 'send-keys -X %s ; if-shell -F \"#{==:#{scroll_position},0}\" \"send-keys -X cancel\"' 'display-message -d 1 \"\"'",
+		command,
+	)
 }
 
 func bossHideCommand(info Info) string {
@@ -154,14 +229,141 @@ func bossRestoreCommand(info Info) string {
 	return strings.Join([]string{
 		fmt.Sprintf("if-shell -F '#{window_zoomed_flag}' 'resize-pane -Z -t %s:0.0' ''", info.SessionName),
 		fmt.Sprintf("set-option -q -t %s pane-border-status %s", info.SessionName, paneBorderStatus),
-		fmt.Sprintf("set-option -q -t %s pane-border-format '%s'", info.SessionName, paneBorderFormat()),
 		fmt.Sprintf("if-shell -F '#{==:#{%s},1}' 'select-pane -t %s:0.1' 'select-pane -t %s:0.0'", bossPrevGameOption, info.SessionName, info.SessionName),
 		fmt.Sprintf("set-option -q -t %s %s 0", info.SessionName, bossHiddenOption),
 	}, " ; ")
 }
 
-func paneBorderFormat() string {
-	return "#{?pane_active,#[bold]#[reverse] ▶ #{pane_title} - #{?#{==:#{pane_index},0},INPUT ACTIVE,CONTROLS ACTIVE} #[default],#[dim]   #{pane_title} - #{?#{==:#{pane_index},0},RUNNING,PAUSED} #[default]}"
+type uiPreset struct {
+	NoColor bool
+}
+
+func uiPresetForSession(runtimeSession session.Session) uiPreset {
+	state, err := session.ReadState(runtimeSession)
+	if err != nil {
+		return uiPreset{}
+	}
+	return uiPreset{NoColor: state.NoColor}
+}
+
+func (p uiPreset) paneBorderStyle() string {
+	if p.NoColor {
+		return monoPaneBorderStyle
+	}
+	return paneBorderStyle
+}
+
+func (p uiPreset) paneActiveBorderStyle() string {
+	if p.NoColor {
+		return monoActiveBorderStyle
+	}
+	return paneActiveBorderStyle
+}
+
+func paneBorderFormat(preset uiPreset) string {
+	activeStyle := "#[align=centre]#[fg=cyan]#[bold]#[reverse]"
+	inactiveStyle := "#[align=centre]#[fg=colour244]"
+	if preset.NoColor {
+		activeStyle = "#[align=centre]#[bold]#[reverse]"
+		inactiveStyle = "#[default]#[align=centre]"
+	}
+	return "#{?pane_active," + activeStyle + "> " + paneTitleFormat(true) + "#[default]," + inactiveStyle + paneTitleFormat(false) + "#[default]}"
+}
+
+func paneTitleFormat(active bool) string {
+	command := tmuxWidthVariant(commandPaneTitleFormat(active, true), commandPaneTitleFormat(active, false))
+	game := tmuxWidthVariant(gamePaneTitleFormat(active, true), gamePaneTitleFormat(active, false))
+	return "#{?#{==:#{pane_index},0}," + command + "," + game + "}"
+}
+
+func tmuxWidthVariant(full string, compact string) string {
+	return fmt.Sprintf("#{?#{>=:#{pane_width},%d},%s,%s}", fullTitleMinWidth, full, compact)
+}
+
+func commandPaneTitleVariant(active bool, width int) string {
+	return commandPaneTitleVariantFor(active, width, session.StatusRunning, nil)
+}
+
+func commandPaneTitleVariantFor(active bool, width int, status string, exitCode *int) string {
+	if width < fullTitleMinWidth {
+		return "COMMAND - F12 Snake - F10 Shell"
+	}
+	if session.IsTerminalStatus(status) {
+		return "COMMAND - " + commandResultLabel(status, exitCode) + " - F12 Snake - F10 Shell"
+	}
+	state := "RUNNING"
+	if active {
+		state = "INPUT"
+	}
+	return "COMMAND - " + state + " - F12 Snake - PgUp/PgDn Scroll - F10 Shell"
+}
+
+func commandPaneTitleFormat(active bool, full bool) string {
+	if !full {
+		return commandPaneTitleVariantFor(active, fullTitleMinWidth-1, session.StatusRunning, nil)
+	}
+	live := commandPaneTitleVariantFor(active, fullTitleMinWidth, session.StatusRunning, nil)
+	return "#{?pane_dead,COMMAND - " + commandDeadResultFormat() + " - F12 Snake - F10 Shell," + live + "}"
+}
+
+func commandDeadResultFormat() string {
+	status := "#{" + commandStatusOption + "}"
+	exitCode := "#{" + commandExitOption + "}"
+	fallbackStatus := "#{pane_dead_status}"
+	fallback := "#{?#{==:" + fallbackStatus + ",0},DONE - EXIT 0," +
+		"#{?#{==:" + fallbackStatus + ",126},START FAILED," +
+		"#{?#{==:" + fallbackStatus + ",127},START FAILED," +
+		"#{?#{==:" + fallbackStatus + ",130},INTERRUPTED,FAILED - EXIT " + fallbackStatus + "}}}}"
+	return "#{?#{==:" + status + "," + session.StatusCompleted + "},DONE - EXIT " + exitCode + "," +
+		"#{?#{==:" + status + "," + session.StatusFailed + "},FAILED - EXIT " + exitCode + "," +
+		"#{?#{==:" + status + "," + session.StatusInterrupted + "},INTERRUPTED," +
+		"#{?#{==:" + status + "," + session.StatusStartFailed + "},START FAILED," + fallback + "}}}}"
+}
+
+func commandResultLabel(status string, exitCode *int) string {
+	switch status {
+	case session.StatusCompleted:
+		if exitCode != nil {
+			return fmt.Sprintf("DONE - EXIT %d", *exitCode)
+		}
+		return "DONE"
+	case session.StatusFailed:
+		if exitCode != nil {
+			return fmt.Sprintf("FAILED - EXIT %d", *exitCode)
+		}
+		return "FAILED"
+	case session.StatusInterrupted:
+		return "INTERRUPTED"
+	case session.StatusStartFailed:
+		return "START FAILED"
+	default:
+		return strings.ToUpper(status)
+	}
+}
+
+func gamePaneTitleVariant(active bool, width int) string {
+	return gamePaneTitleVariantFor(active, width, false)
+}
+
+func gamePaneTitleVariantFor(active bool, width int, paused bool) string {
+	if width < fullTitleMinWidth {
+		return "SNAKE - F12 Command - P Pause - F10 Shell"
+	}
+	state := "PAUSED"
+	if active && !paused {
+		state = "ACTIVE"
+	}
+	return "SNAKE - " + state + " - F12 Command - P Pause - F10 Shell"
+}
+
+func gamePaneTitleFormat(active bool, full bool) string {
+	if !full {
+		return gamePaneTitleVariantFor(active, fullTitleMinWidth-1, false)
+	}
+	if !active {
+		return gamePaneTitleVariantFor(false, fullTitleMinWidth, false)
+	}
+	return "SNAKE - #{?#{==:#{@" + strings.TrimPrefix(gamePausedOption, "@") + "},1},PAUSED,ACTIVE} - F12 Command - P Pause - F10 Shell"
 }
 
 func (l Layout) Attach(info Info) error {
@@ -251,6 +453,52 @@ func (l Layout) DetachClients(info Info) error {
 	return nil
 }
 
+func (l Layout) SetGamePaused(info Info, paused bool) error {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = quietRunner()
+	}
+
+	value := "0"
+	if paused {
+		value = "1"
+	}
+	if err := runner.Run(tmuxPath, "-f", "/dev/null", "-L", info.SocketName, "set-option", "-q", "-t", info.SessionName, gamePausedOption, value); err != nil {
+		return fmt.Errorf("update game pane state: %w", err)
+	}
+
+	return nil
+}
+
+func (l Layout) SetCommandState(info Info, state session.State) error {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = quietRunner()
+	}
+
+	exitCode := ""
+	if state.ExitCode != nil {
+		exitCode = fmt.Sprintf("%d", *state.ExitCode)
+	}
+	baseArgs := []string{"-f", "/dev/null", "-L", info.SocketName, "set-option", "-q", "-t", info.SessionName}
+	if err := runner.Run(tmuxPath, append(baseArgs, commandStatusOption, state.Status)...); err != nil {
+		return fmt.Errorf("update command pane state: %w", err)
+	}
+	if err := runner.Run(tmuxPath, append(baseArgs, commandExitOption, exitCode)...); err != nil {
+		return fmt.Errorf("update command pane exit code: %w", err)
+	}
+
+	return nil
+}
+
 func (l Layout) GamePaneActive(info Info) (bool, error) {
 	tmuxPath := l.TmuxPath
 	if tmuxPath == "" {
@@ -312,6 +560,47 @@ func (l Layout) CaptureCommandPane(info Info) (string, bool, error) {
 	return text, truncated, nil
 }
 
+func (l Layout) CaptureCommandPreview(info Info) (string, error) {
+	tmuxPath := l.TmuxPath
+	if tmuxPath == "" {
+		tmuxPath = "tmux"
+	}
+	runner := l.CommandRunner
+	if runner == nil {
+		runner = quietRunner()
+	}
+	outputRunner, ok := runner.(OutputRunner)
+	if !ok {
+		return "", fmt.Errorf("tmux runner cannot capture output")
+	}
+
+	output, err := outputRunner.Output(
+		tmuxPath,
+		"-f", "/dev/null",
+		"-L", info.SocketName,
+		"capture-pane",
+		"-p",
+		"-J",
+		"-S", fmt.Sprintf("-%d", commandPanePreviewLines),
+		"-t", info.SessionName+":0.0",
+	)
+	if err != nil {
+		return "", fmt.Errorf("capture command preview: %w", err)
+	}
+	return lastCommandPreviewLine(string(output)), nil
+}
+
+func lastCommandPreviewLine(output string) string {
+	lines := strings.Split(output, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := strings.TrimSpace(lines[index])
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
 func (l Layout) HasSession(info Info) bool {
 	tmuxPath := l.TmuxPath
 	if tmuxPath == "" {
@@ -362,33 +651,4 @@ func shellQuote(value string) string {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
-}
-
-func centeredPaneTitle(outputRunner OutputRunner, tmuxPath string, baseArgs []string, paneTarget string, title string) string {
-	width, err := paneWidth(outputRunner, tmuxPath, baseArgs, paneTarget)
-	if err != nil || width <= 0 {
-		return title
-	}
-	titleWidth := len([]rune(title))
-	if titleWidth >= width {
-		return title
-	}
-	padding := (width - titleWidth) / 2
-	if padding <= 0 {
-		return title
-	}
-	return strings.Repeat(" ", padding) + title
-}
-
-func paneWidth(outputRunner OutputRunner, tmuxPath string, baseArgs []string, paneTarget string) (int, error) {
-	args := append(append([]string{}, baseArgs...), "display-message", "-p", "-t", paneTarget, "#{pane_width}")
-	output, err := outputRunner.Output(tmuxPath, args...)
-	if err != nil {
-		return 0, err
-	}
-	width, err := strconv.Atoi(strings.TrimSpace(string(output)))
-	if err != nil {
-		return 0, err
-	}
-	return width, nil
 }

@@ -28,15 +28,15 @@ sidequest \- play a tiny terminal game while waiting for a command
 runs a command in one tmux pane and opens a small terminal game in another.
 The game pane is focused first and starts on the first move. When the command
 finishes during a playable round, Sidequest pauses Snake and asks whether to
-continue the current round or quit. Quitting finalizes the score and shows the
-command state, exit code or signal, runtime, final score, and the local TOP 5.
+continue the current round. Finished-command screens show the command state,
+exit code or signal, runtime, current score, and the local TOP 5.
 .PP
 Snake uses Command Heat. Heat rises with accumulated active Snake playtime,
 speeds up Snake movement, increases the food score multiplier, and is capped at
 the maximum Heat level. Time spent before the first move, paused, detached,
-after round over, after command completion, or focused in the command pane does
-not raise Heat. If the player continues after command completion, the reached
-Heat level still controls Snake speed and food value.
+after round over, in the command-finished choice, or focused in the command pane
+does not raise Heat. If the player continues after command completion, the same
+round resumes and Heat increases again only during active gameplay.
 .PP
 .B F9
 hides or restores the Sidequest UI by zooming the command pane inside the
@@ -85,6 +85,17 @@ bonuses and local game statistics.
 Do not capture or persist command-pane output when the Sidequest session is
 closed. No stored run metadata or output file is created for that run. The live
 tmux pane scrollback remains visible until the session is closed.
+.TP
+.B \-\-no-color
+Disable colors in Sidequest's own game and UI rendering. The wrapped command's
+output is not modified. A non-empty
+.B NO_COLOR
+environment variable enables the same behavior.
+.TP
+.B \-\-aug
+Enable augmented game HUD context. Sidequest shows the latest non-empty command
+output line centered in the game pane while leaving the original command pane
+unchanged.
 .SH COMMANDS
 .TP
 .B list
@@ -117,6 +128,11 @@ Switch between the game pane and the command pane. Snake focus-pauses while the
 command pane is active and resumes when the game pane is active again, unless it
 was manually paused.
 .TP
+.B Page Up, Page Down, arrow up, arrow down
+Scroll the command pane when the command pane is active. In the game pane, arrow
+keys continue to control Snake. Scrolling back to the bottom resumes live
+command output.
+.TP
 .B F10
 Detach from the Sidequest tmux session and return to the shell. The session stays
 listed for later attach. If the command is still running, Sidequest prints the
@@ -130,23 +146,11 @@ Toggle manual pause. Manual pause is separate from command-pane focus pause.
 .TP
 .B C
 Continue the same Snake round when the wrapped command has finished and the
-round is still playable. The command is not run again, and Command Heat remains
-frozen at the level reached when the command ended.
+round is still playable. The command is not run again. Heat resumes increasing
+only during active gameplay after the player continues.
 .TP
 .B R
 Restart Snake after a round over while the command is still running.
-.TP
-.B Q
-Finalize and quit after the wrapped command has reached a terminal state. During
-a playable round, the command-finished modal offers
-.B C
-to continue or
-.B Q
-to finalize. During a running command, use
-.B F9
-to hide Sidequest or
-.B F10
-to detach.
 .SH HIGHSCORES
 Sidequest keeps at most five scores per mode. Scores are sorted descending and
 equal scores keep deterministic insertion order. The result panel marks the

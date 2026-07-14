@@ -3,6 +3,7 @@
 /bin/
 /dist/
 /build/
+/stuff/
 
 # Go test and profiling output
 *.test

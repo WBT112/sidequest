@@ -405,6 +405,8 @@ Update documentation when changing:
 * supported platforms;
 * security or privacy behavior;
 * package contents.
+* ONLY update the README.md when the issue states it OR when an already there documented thing changes. Keep the README.md small and focused on the user experience. Use AGENTS.md for technical details.
+* The full documentation belongs in the manpage, which is generated from the Markdown source in `docs/sidequest.1.md`. The manpage must be kept in sync with the Markdown source. Do not edit the manpage directly.
 
 Examples in documentation must use the `--` separator.
 

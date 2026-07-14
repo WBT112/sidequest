@@ -2,6 +2,7 @@ package game
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -117,8 +118,14 @@ func TestSnakeRetriesMissingFoodAfterRecover(t *testing.T) {
 
 	game.Recover()
 
-	if !game.FoodValid(nil) {
-		t.Fatalf("Food = %#v, want valid food after recovery reset the snake", game.Food)
+	if game.Over {
+		t.Fatal("Over = true after recovery, want false")
+	}
+	if len(game.Snake) != 2 {
+		t.Fatalf("snake length = %d, want preserved length 2", len(game.Snake))
+	}
+	if game.Food != (Point{X: -1, Y: -1}) {
+		t.Fatalf("Food = %#v on full board, want missing food", game.Food)
 	}
 }
 
@@ -159,6 +166,96 @@ func TestSnakeEndsRoundOnSelfCollision(t *testing.T) {
 	}
 }
 
+func TestSnakeIgnoresQueuedSideTurnIntoSelfWhenStraightIsSafe(t *testing.T) {
+	game := NewSnakeGame(6, 5, func(int) int { return 0 })
+	game.Snake = []Point{
+		{X: 2, Y: 2},
+		{X: 2, Y: 3},
+		{X: 1, Y: 3},
+		{X: 1, Y: 2},
+	}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	game.PendingDirs = []Direction{DirectionDown}
+
+	result := game.Step()
+
+	if result != StepMoved {
+		t.Fatalf("Step result = %v, want moved", result)
+	}
+	if game.Over {
+		t.Fatal("game.Over = true, want false")
+	}
+	if game.Dir != DirectionRight {
+		t.Fatalf("Dir = %v, want straight right", game.Dir)
+	}
+	assertSnake(t, game.Snake, []Point{
+		{X: 3, Y: 2},
+		{X: 2, Y: 2},
+		{X: 2, Y: 3},
+		{X: 1, Y: 3},
+	})
+}
+
+func TestSnakeExecutesSafeQueuedSideTurnNormally(t *testing.T) {
+	game := NewSnakeGame(6, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 2}, {X: 1, Y: 2}, {X: 0, Y: 2}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	game.PendingDirs = []Direction{DirectionDown}
+
+	result := game.Step()
+
+	if result != StepMoved {
+		t.Fatalf("Step result = %v, want moved", result)
+	}
+	if game.Dir != DirectionDown || game.Snake[0] != (Point{X: 2, Y: 3}) {
+		t.Fatalf("dir=%v head=%#v, want down to 2,3", game.Dir, game.Snake[0])
+	}
+}
+
+func TestSnakeDoesNotProtectQueuedSideTurnIntoWall(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 0}, {X: 1, Y: 0}, {X: 0, Y: 0}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 4}
+	game.PendingDirs = []Direction{DirectionUp}
+
+	result := game.Step()
+
+	if result != StepHitWall {
+		t.Fatalf("Step result = %v, want wall collision", result)
+	}
+	if !game.Over {
+		t.Fatal("game.Over = false, want true")
+	}
+}
+
+func TestSnakeKeepsQueuedSelfCollisionWhenStraightIsUnsafe(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{
+		{X: 1, Y: 1},
+		{X: 2, Y: 1},
+		{X: 1, Y: 2},
+		{X: 1, Y: 3},
+	}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	game.PendingDirs = []Direction{DirectionDown}
+
+	result := game.Step()
+
+	if result != StepHitSelf {
+		t.Fatalf("Step result = %v, want self collision", result)
+	}
+	if !game.Over {
+		t.Fatal("game.Over = false, want true")
+	}
+	if game.Dir != DirectionDown {
+		t.Fatalf("Dir = %v, want queued direction retained for normal collision", game.Dir)
+	}
+}
+
 func TestSnakeMayMoveIntoVacatedTail(t *testing.T) {
 	game := NewSnakeGame(5, 5, func(int) int { return 0 })
 	game.Snake = []Point{
@@ -176,6 +273,107 @@ func TestSnakeMayMoveIntoVacatedTail(t *testing.T) {
 	}
 	if game.Over {
 		t.Fatal("game.Over = true, want false")
+	}
+}
+
+func TestSnakeQueuedTurnMayMoveIntoVacatedTail(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 2}, {X: 2, Y: 3}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	game.PendingDirs = []Direction{DirectionDown}
+
+	result := game.Step()
+
+	if result != StepMoved {
+		t.Fatalf("Step result = %v, want moved into vacated tail", result)
+	}
+	if game.Dir != DirectionDown || game.Snake[0] != (Point{X: 2, Y: 3}) {
+		t.Fatalf("dir=%v head=%#v, want down into vacated tail", game.Dir, game.Snake[0])
+	}
+}
+
+func TestSnakeQueuedTurnIntoTailDuringGrowthUsesStraightFallback(t *testing.T) {
+	game := NewSnakeGame(5, 5, func(int) int { return 0 })
+	game.Snake = []Point{{X: 2, Y: 2}, {X: 2, Y: 3}}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	game.PendingDirs = []Direction{DirectionDown}
+
+	result := game.StepGrow()
+
+	if result != StepAteFood {
+		t.Fatalf("StepGrow result = %v, want growth move", result)
+	}
+	if game.Over {
+		t.Fatal("game.Over = true, want false")
+	}
+	if game.Dir != DirectionRight || game.Snake[0] != (Point{X: 3, Y: 2}) {
+		t.Fatalf("dir=%v head=%#v, want straight growth fallback", game.Dir, game.Snake[0])
+	}
+	if len(game.Snake) != 3 {
+		t.Fatalf("snake length = %d, want growth to 3", len(game.Snake))
+	}
+}
+
+func TestSnakeUnsafeQueuedTurnFallbackCanEatFoodStraightAhead(t *testing.T) {
+	game := NewSnakeGame(6, 5, func(int) int { return 0 })
+	game.Snake = []Point{
+		{X: 2, Y: 2},
+		{X: 2, Y: 3},
+		{X: 1, Y: 3},
+		{X: 1, Y: 2},
+	}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 3, Y: 2}
+	game.PendingDirs = []Direction{DirectionDown}
+
+	result := game.Step()
+
+	if result != StepAteFood {
+		t.Fatalf("Step result = %v, want food eaten straight ahead", result)
+	}
+	if game.Score != 1 {
+		t.Fatalf("Score = %d, want 1", game.Score)
+	}
+	if game.Dir != DirectionRight || game.Snake[0] != (Point{X: 3, Y: 2}) {
+		t.Fatalf("dir=%v head=%#v, want straight food fallback", game.Dir, game.Snake[0])
+	}
+}
+
+func TestSnakeUnsafeQueuedTurnFallbackMatchesClassicAndQuest(t *testing.T) {
+	now := time.Date(2026, 7, 13, 18, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name  string
+		quest *QuestState
+	}{
+		{name: "classic"},
+		{name: "quest", quest: NewQuestState(GameModeQuest, now, fixedRandom(0), 6, 5)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			game := NewSnakeGame(6, 5, func(int) int { return 0 })
+			game.Snake = []Point{
+				{X: 2, Y: 2},
+				{X: 2, Y: 3},
+				{X: 1, Y: 3},
+				{X: 1, Y: 2},
+			}
+			game.Dir = DirectionRight
+			game.Food = Point{X: 0, Y: 0}
+			game.PendingDirs = []Direction{DirectionDown}
+
+			result := stepGame(game, test.quest, HeatByLevel(1), now)
+
+			if result != StepMoved {
+				t.Fatalf("Step result = %v, want moved", result)
+			}
+			if game.Over {
+				t.Fatal("game.Over = true, want false")
+			}
+			if game.Dir != DirectionRight || game.Snake[0] != (Point{X: 3, Y: 2}) {
+				t.Fatalf("dir=%v head=%#v, want straight fallback", game.Dir, game.Snake[0])
+			}
+		})
 	}
 }
 
@@ -436,6 +634,34 @@ func TestSnakeConsumesOneQueuedDirectionPerStep(t *testing.T) {
 
 	if game.Dir != DirectionUp {
 		t.Fatalf("Dir = %v, want up", game.Dir)
+	}
+	if got, want := len(game.PendingDirs), 1; got != want {
+		t.Fatalf("len(PendingDirs) = %d, want %d", got, want)
+	}
+	if game.PendingDirs[0] != DirectionLeft {
+		t.Fatalf("remaining PendingDirs[0] = %v, want left", game.PendingDirs[0])
+	}
+}
+
+func TestSnakeUnsafeQueuedTurnDropsOnlyFirstDirection(t *testing.T) {
+	game := NewSnakeGame(6, 5, func(int) int { return 0 })
+	game.Snake = []Point{
+		{X: 2, Y: 2},
+		{X: 2, Y: 3},
+		{X: 1, Y: 3},
+		{X: 1, Y: 2},
+	}
+	game.Dir = DirectionRight
+	game.Food = Point{X: 0, Y: 0}
+	game.PendingDirs = []Direction{DirectionDown, DirectionLeft}
+
+	result := game.Step()
+
+	if result != StepMoved {
+		t.Fatalf("Step result = %v, want straight fallback move", result)
+	}
+	if game.Dir != DirectionRight || game.Snake[0] != (Point{X: 3, Y: 2}) {
+		t.Fatalf("dir=%v head=%#v, want one straight move", game.Dir, game.Snake[0])
 	}
 	if got, want := len(game.PendingDirs), 1; got != want {
 		t.Fatalf("len(PendingDirs) = %d, want %d", got, want)

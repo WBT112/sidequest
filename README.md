@@ -16,6 +16,7 @@ You also get noticed when the command finishes. By default, command-pane output 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Gameplay](#gameplay)
+- [FAQ / Known Issues](#faq--known-issues)
 
 ## Installation
 
@@ -43,6 +44,8 @@ packages for manual installation.
 sidequest -- ssh deploy@example.com
 sidequest -- sh -c 'sudo du -xh /var /usr /home 2>/dev/null | sort -h'
 sidequest --no-history -- ssh production.example.com
+sidequest --no-color -- make test
+sidequest --aug -- make test
 sidequest --mode quest -- make test
 sidequest -- codex
 sidequest -- claude "Run the test suite, fix any failures, and summarize the changes."
@@ -51,7 +54,7 @@ sidequest -- claude "Run the test suite, fix any failures, and summarize the cha
 Try it with a harmless demo workload:
 
 ```bash
-sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i"; sleep 1; done'
+sidequest --aug -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i"; sleep 1; done'
 ```
 
 ## Gameplay
@@ -61,24 +64,52 @@ sidequest -- bash -c 'for i in {1..60}; do printf "working step %02d/60\n" "$i";
 - `F12` switches between Snake and the command pane.
 - Snake focus-pauses while the command pane is active and resumes when the game
   pane is active again, unless you paused manually.
+- In the command pane, `Page Up` and `Page Down` scroll pages; arrow up and
+  arrow down scroll line by line. Scrolling back to the bottom resumes live
+  command output.
 - `F10` detaches back to your shell. If the command is still running, Sidequest
   prints the `sidequest attach <id>` command.
 - `R` restarts Snake after a round over while the command keeps running.
-- After the command finishes, `C` continues the current round and `Q` finalizes
-  and quits.
+- After the command finishes, `C` continues the current round. Use `F10` to
+  return to your shell.
 
 Classic mode keeps Snake simple and adds Command Heat: the longer you actively
 play, the faster Snake gets and the more food is worth. Time spent in the
-command pane or on pause does not raise Heat. After the command has finished,
-Heat stays frozen at the reached level while the round can continue.
+command pane, on pause, or in the command-finished choice does not raise Heat.
+If you press `C` after the command finishes, the same round continues and Heat
+resumes increasing only during active gameplay.
 
-Quest mode adds combo scoring, one mission per command, Golden Bytes, random
-arena pickups and other stuff.
+Quest mode adds combo scoring, one mission per command, Golden Bytes that grow
+Snake by two cells, random arena pickups and other stuff.
+
+Use `--aug` to show the latest command output line centered in the game pane
+while the original command pane stays unchanged.
+
+Use `--no-color` or a non-empty `NO_COLOR` environment variable for monochrome
+Sidequest game/UI rendering. Wrapped command output is left untouched.
 
 For complete controls and behavior details, use:
 
 ```bash
 man sidequest
+```
+
+## FAQ / Known Issues
+
+### Snake graphics look wrong in MobaXterm or older SSH terminals
+
+Some terminals render block characters differently. Sidequest keeps rich block
+graphics by default, but can use a safer ASCII fallback:
+
+```bash
+SIDEQUEST_GRAPHICS=ascii sidequest -- <command>
+```
+
+If Sidequest detects a fallback but your terminal renders rich graphics
+correctly, force the default style:
+
+```bash
+SIDEQUEST_GRAPHICS=rich sidequest -- <command>
 ```
 
 ## Sessions and History

@@ -9,10 +9,19 @@ const (
 	GameModeClassic = "classic"
 	GameModeQuest   = "quest"
 
-	comboWindow         = 8 * time.Second
-	goldenByteTTL       = 12 * time.Second
-	goldenByteBase      = 100
-	pickupTTL           = 12 * time.Second
+	comboWindow    = 8 * time.Second
+	minComboWindow = 5 * time.Second
+	maxComboWindow = 12 * time.Second
+	goldenByteTTL  = 20 * time.Second
+	goldenByteBase = 100
+	pickupTTL      = 20 * time.Second
+	pickupSpawnMin = 4
+	pickupSpawnMax = 8
+	goldenSpawnMin = 6
+	goldenSpawnMax = 9
+	// A Golden Byte is an explicit high-value risk/reward pickup: the move
+	// itself grows once, then tail growth attempts to reach this total.
+	goldenByteGrowth    = 2
 	shieldDuration      = 30 * time.Second
 	phaseDuration       = 20 * time.Second
 	slowClockDuration   = 15 * time.Second
@@ -25,7 +34,8 @@ const (
 	maxComboBonusUnit   = 100
 	maxHeatBonusUnit    = 100
 	normalMinimumSpeed  = 180 * time.Millisecond
-	turboMinimumSpeed   = 70 * time.Millisecond
+	turboMinimumSpeed   = 55 * time.Millisecond
+	turboSpeedPermille  = 650
 	turboScorePermille  = 1250
 	doubleScoreCharges  = 3
 	doubleScoreCap      = 6
@@ -143,6 +153,7 @@ type QuestState struct {
 	NormalFood      int
 	GoldenCollected int
 	Golden          GoldenByte
+	NextGoldenFood  int
 
 	Mission          Mission
 	MissionProgress  int
@@ -151,6 +162,7 @@ type QuestState struct {
 	MaxHeat          int
 
 	Pickup           UpgradePickup
+	NextPickupFood   int
 	Shield           TimedCharge
 	Phase            TimedCharge
 	Warp             TimedCharge
@@ -187,10 +199,16 @@ func (q *QuestState) OnNormalFood(game *SnakeGame, heat HeatLevel, now time.Time
 	if !q.Enabled() || q.Completed {
 		return
 	}
+	if q.NextPickupFood == 0 {
+		q.scheduleNextPickup(q.NormalFood)
+	}
+	if q.NextGoldenFood == 0 {
+		q.scheduleNextGolden(q.NormalFood)
+	}
 	q.expireEffects(now)
 	q.refreshCombo(now)
 	q.Combo++
-	q.ComboExpiresAt = now.Add(comboWindow)
+	q.ComboExpiresAt = now.Add(comboDuration(q.Combo))
 	if q.Combo > q.MaxCombo {
 		q.MaxCombo = q.Combo
 	}
@@ -206,8 +224,10 @@ func (q *QuestState) OnNormalFood(game *SnakeGame, heat HeatLevel, now time.Time
 	q.BaseScore += score
 	game.Score = q.BaseScore
 	q.updateMission(heat, now, false)
-	if q.NormalFood%5 == 0 && !q.Pickup.Active {
-		q.spawnPickup(game, now)
+	if q.NormalFood >= q.NextPickupFood && !q.Pickup.Active {
+		if q.spawnPickup(game, now) {
+			q.scheduleNextPickup(q.NormalFood)
+		}
 	}
 	q.maybeSpawnGolden(game, now)
 }
@@ -219,7 +239,7 @@ func (q *QuestState) OnGoldenByte(game *SnakeGame, heat HeatLevel, now time.Time
 	q.expireEffects(now)
 	q.refreshCombo(now)
 	q.Combo++
-	q.ComboExpiresAt = now.Add(comboWindow)
+	q.ComboExpiresAt = now.Add(comboDuration(q.Combo))
 	if q.Combo > q.MaxCombo {
 		q.MaxCombo = q.Combo
 	}
@@ -248,10 +268,7 @@ func (q *QuestState) OnPickupCollected(game *SnakeGame, heat HeatLevel, now time
 		q.SlowUntil = now.Add(slowClockDuration)
 		q.notice("PICKUP: SLOW CLOCK", now)
 	case UpgradeDoubleScore:
-		q.DoubleCharges += doubleScoreCharges
-		if q.DoubleCharges > doubleScoreCap {
-			q.DoubleCharges = doubleScoreCap
-		}
+		q.DoubleCharges = doubleScoreCharges
 		q.DoubleUntil = now.Add(doubleScoreDuration)
 		q.notice("PICKUP: DOUBLE SCORE", now)
 	case UpgradePatch:
@@ -305,18 +322,20 @@ func (q *QuestState) TryCollisionEffects(game *SnakeGame, result StepResult, now
 	q.expireEffects(now)
 	if q.Phase.Charges > 0 && now.Before(q.Phase.ExpiresAt) && game.PhaseForward() {
 		q.Phase = TimedCharge{}
+		q.ResizeObjects(game)
 		q.notice("PHASE USED", now)
 		return StepMoved
 	}
 	if q.Shield.Charges > 0 && now.Before(q.Shield.ExpiresAt) {
 		q.Shield = TimedCharge{}
 		game.Recover()
-		q.EnsureFood(game)
+		q.ResizeObjects(game)
 		q.notice("SHIELD USED", now)
 		return StepMoved
 	}
 	if q.Warp.Charges > 0 && now.Before(q.Warp.ExpiresAt) && game.WarpToFreePoint(q.Rand, append([]Point{game.Food}, q.ActiveObjectPoints()...)) {
 		q.Warp = TimedCharge{}
+		q.ResizeObjects(game)
 		q.notice("WARP USED", now)
 		return StepMoved
 	}
@@ -329,7 +348,7 @@ func (q *QuestState) TryShieldRecovery(game *SnakeGame) bool {
 	}
 	q.Shield = TimedCharge{}
 	game.Recover()
-	q.EnsureFood(game)
+	q.ResizeObjects(game)
 	return true
 }
 
@@ -345,7 +364,7 @@ func (q *QuestState) EffectiveInterval(base time.Duration, now time.Time) time.D
 		}
 	}
 	if !q.TurboUntil.IsZero() && now.Before(q.TurboUntil) {
-		interval = interval * 85 / 100
+		interval = interval * turboSpeedPermille / 1000
 		if interval < turboMinimumSpeed {
 			interval = turboMinimumSpeed
 		}
@@ -416,7 +435,7 @@ func (q *QuestState) refreshCombo(now time.Time) {
 		}
 		q.ComboKeeperUntil = time.Time{}
 		if !now.Before(q.ComboExpiresAt) {
-			q.ComboExpiresAt = now.Add(comboWindow)
+			q.ComboExpiresAt = now.Add(comboDuration(q.Combo))
 			return
 		}
 	}
@@ -426,8 +445,22 @@ func (q *QuestState) refreshCombo(now time.Time) {
 	}
 }
 
+func comboDuration(combo int) time.Duration {
+	if combo <= 0 {
+		return minComboWindow
+	}
+	duration := time.Duration(4+combo) * time.Second
+	if duration < minComboWindow {
+		return minComboWindow
+	}
+	if duration > maxComboWindow {
+		return maxComboWindow
+	}
+	return duration
+}
+
 func (q *QuestState) maybeSpawnGolden(game *SnakeGame, now time.Time) {
-	if q.Golden.Active || q.NormalFood == 0 || q.NormalFood%7 != 0 {
+	if q.Golden.Active || q.NormalFood < q.NextGoldenFood {
 		return
 	}
 	extraOccupied := []Point{game.Food}
@@ -439,6 +472,15 @@ func (q *QuestState) maybeSpawnGolden(game *SnakeGame, now time.Time) {
 		return
 	}
 	q.Golden = GoldenByte{Position: point, ExpiresAt: now.Add(goldenByteTTL), Active: true}
+	q.scheduleNextGolden(q.NormalFood)
+}
+
+func (q *QuestState) scheduleNextPickup(normalFood int) {
+	q.NextPickupFood = normalFood + randomRange(q.Rand, pickupSpawnMin, pickupSpawnMax)
+}
+
+func (q *QuestState) scheduleNextGolden(normalFood int) {
+	q.NextGoldenFood = normalFood + randomRange(q.Rand, goldenSpawnMin, goldenSpawnMax)
 }
 
 func (q *QuestState) spawnPickup(game *SnakeGame, now time.Time) bool {
@@ -718,7 +760,7 @@ func secondsLeft(deadline time.Time, now time.Time) int {
 	if remaining <= 0 {
 		return 0
 	}
-	return int(remaining.Round(time.Second).Seconds())
+	return int((remaining + time.Second - time.Nanosecond) / time.Second)
 }
 
 func freePoint(game *SnakeGame, random RandomSource, extraOccupied []Point) (Point, bool) {
@@ -761,4 +803,11 @@ func randomIndex(random RandomSource, max int) int {
 		return max - 1
 	}
 	return value
+}
+
+func randomRange(random RandomSource, min int, max int) int {
+	if max < min {
+		return min
+	}
+	return min + randomIndex(random, max-min+1)
 }

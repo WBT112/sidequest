@@ -3,6 +3,7 @@ package game
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -15,9 +16,12 @@ const DefaultPollInterval = 250 * time.Millisecond
 const DefaultGameInterval = 0
 const movementPulseInterval = 10 * time.Millisecond
 const focusPollInterval = 100 * time.Millisecond
+const defaultInitialRenderDelay = 80 * time.Millisecond
 
 type StateReader func() (session.State, error)
 type FocusReader func() (bool, error)
+type CommandPreviewReader func() (string, error)
+type PanePauseWriter func(paused bool) error
 
 type CommandCompletionChoice int
 
@@ -25,7 +29,6 @@ const (
 	CompletionNone CommandCompletionChoice = iota
 	CompletionUndecided
 	CompletionContinue
-	CompletionQuit
 )
 
 type PauseState struct {
@@ -78,15 +81,17 @@ func (c PlayClock) Elapsed(now time.Time) time.Duration {
 }
 
 type Shell struct {
-	NewScreen      func() (tcell.Screen, error)
-	ReadState      StateReader
-	ReadFocus      FocusReader
-	OnQuitTerminal func() error
-	Random         RandomSource
-	StatsManager   StatsManager
-	PollInterval   time.Duration
-	GameInterval   time.Duration
-	Now            func() time.Time
+	NewScreen          func() (tcell.Screen, error)
+	ReadState          StateReader
+	ReadFocus          FocusReader
+	ReadCommandPreview CommandPreviewReader
+	UpdatePanePause    PanePauseWriter
+	Random             RandomSource
+	StatsManager       StatsManager
+	PollInterval       time.Duration
+	GameInterval       time.Duration
+	InitialRenderDelay time.Duration
+	Now                func() time.Time
 }
 
 type viewState struct {
@@ -96,6 +101,7 @@ type viewState struct {
 	Frozen          bool
 	Message         string
 	Started         bool
+	NoColor         bool
 	Game            *SnakeGame
 	CommandHeat     HeatLevel
 	FrozenHeat      HeatLevel
@@ -104,9 +110,8 @@ type viewState struct {
 	MaxHeat         int
 	HeatNotice      string
 	NoticeUntil     time.Time
+	GraphicsNotice  string
 	RoundStarted    time.Time
-	RoundHeat       int
-	RoundCatchUp    bool
 	Clock           PlayClock
 	GameEpoch       time.Time
 	GameTime        time.Time
@@ -121,6 +126,9 @@ type viewState struct {
 	PendingScore    *PendingHighscore
 	StatsMessage    string
 	Completion      CommandCompletionChoice
+	CommandPreview  string
+	PanePauseKnown  bool
+	PanePaused      bool
 }
 
 type PendingHighscore struct {
@@ -150,12 +158,6 @@ func (s Shell) Run(ctx context.Context) error {
 	}
 	defer screen.Fini()
 
-	pollInterval := s.PollInterval
-	if pollInterval <= 0 {
-		pollInterval = DefaultPollInterval
-	}
-	gameIntervalOverride := s.GameInterval
-
 	events := make(chan tcell.Event, 8)
 	done := make(chan struct{})
 	go pollEvents(screen, events, done)
@@ -163,6 +165,13 @@ func (s Shell) Run(ctx context.Context) error {
 		close(done)
 		screen.PostEvent(tcell.NewEventInterrupt(nil))
 	}()
+	s.syncInitialScreen(screen, events)
+
+	pollInterval := s.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = DefaultPollInterval
+	}
+	gameIntervalOverride := s.GameInterval
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -179,17 +188,20 @@ func (s Shell) Run(ctx context.Context) error {
 	mode := gameMode(state.GameMode)
 	boardWidth, boardHeight := boardSize(screen)
 	view := viewState{
-		State:        state,
-		SessionState: state.Status,
-		Frozen:       terminalState(state.Status),
-		Game:         game,
-		RoundStarted: gameEpoch,
-		RoundHeat:    1,
-		GameEpoch:    gameEpoch,
-		GameTime:     gameEpoch,
-		Quest:        NewQuestState(mode, gameEpoch, s.Random, boardWidth, boardHeight),
+		State:          state,
+		SessionState:   state.Status,
+		Frozen:         terminalState(state.Status),
+		NoColor:        state.NoColor,
+		Game:           game,
+		RoundStarted:   gameEpoch,
+		GameEpoch:      gameEpoch,
+		GameTime:       gameEpoch,
+		GraphicsNotice: initialGraphicsNotice(),
+		Quest:          NewQuestState(mode, gameEpoch, s.Random, boardWidth, boardHeight),
 	}
 	s.syncFocus(&view, now, true)
+	s.syncPanePause(&view)
+	s.syncCommandPreview(&view)
 	s.syncPlayClock(&view, now)
 	updateViewGameTime(&view, now)
 	updateViewHeat(&view, now)
@@ -204,11 +216,8 @@ func (s Shell) Run(ctx context.Context) error {
 			switch typed := event.(type) {
 			case *tcell.EventKey:
 				if view.PendingScore != nil {
-					quit, handled := s.handlePendingHighscoreKey(&view, typed)
+					handled := s.handlePendingHighscoreKey(&view, typed)
 					render(screen, view)
-					if quit {
-						return s.quit(view)
-					}
 					if handled {
 						continue
 					}
@@ -219,23 +228,17 @@ func (s Shell) Run(ctx context.Context) error {
 					case typed.Key() == tcell.KeyRune && (typed.Rune() == 'c' || typed.Rune() == 'C'):
 						view.Completion = CompletionContinue
 						view.Pause.Completion = false
+						view.HeatFrozen = false
+						view.FrozenHeat = HeatLevel{}
 						game.ClearPendingDirections()
 						updateViewGameTime(&view, now)
 						updateViewHeat(&view, now)
+						s.syncPanePause(&view)
 						if view.Started && !view.Pause.Active() && !game.Over {
 							view.Clock.Start(now)
 						}
 						nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 						render(screen, view)
-						continue
-					case typed.Key() == tcell.KeyRune && (typed.Rune() == 'q' || typed.Rune() == 'Q'):
-						view.Completion = CompletionQuit
-						view.Pause.Completion = false
-						finalizeCompletionQuit(&view, s.statsManager())
-						render(screen, view)
-						if view.PendingScore == nil {
-							return s.quit(view)
-						}
 						continue
 					default:
 						render(screen, view)
@@ -243,8 +246,6 @@ func (s Shell) Run(ctx context.Context) error {
 					}
 				}
 				switch {
-				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'q' || typed.Rune() == 'Q') && session.IsTerminalStatus(view.SessionState):
-					return s.quit(view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'p' || typed.Rune() == 'P'):
 					now := s.now()
 					wasPaused := view.Pause.Active()
@@ -259,10 +260,10 @@ func (s Shell) Run(ctx context.Context) error {
 					}
 					updateViewGameTime(&view, now)
 					updateViewHeat(&view, now)
+					s.syncPanePause(&view)
 					render(screen, view)
 				case typed.Key() == tcell.KeyRune && (typed.Rune() == 'r' || typed.Rune() == 'R') && !view.Frozen && game.Over:
 					now := s.now()
-					updateViewGameTime(&view, now)
 					if view.RoundFinalized && !view.QuestStatsSaved {
 						updateQuestStats(&view, s.statsManager())
 					}
@@ -274,10 +275,18 @@ func (s Shell) Run(ctx context.Context) error {
 					view.Game = game
 					view.Started = false
 					view.Pause.Manual = false
-					view.Clock.Stop(now)
-					view.RoundStarted = view.GameTime
-					view.RoundHeat = RestartStartHeat(view.CommandHeat.Level)
-					view.RoundCatchUp = view.RoundHeat < view.CommandHeat.Level
+					s.syncPanePause(&view)
+					view.Clock = PlayClock{}
+					view.GameEpoch = now
+					view.GameTime = now
+					view.RoundStarted = now
+					view.CommandHeat = HeatByLevel(1)
+					view.FrozenHeat = HeatLevel{}
+					view.HeatFrozen = false
+					view.Heat = HeatByLevel(1)
+					view.MaxHeat = 0
+					view.HeatNotice = ""
+					view.NoticeUntil = time.Time{}
 					view.RoundFinalized = false
 					view.QuestStatsSaved = false
 					view.ResultScore = 0
@@ -287,7 +296,7 @@ func (s Shell) Run(ctx context.Context) error {
 					view.StatsMessage = ""
 					view.Message = statsMessage
 					boardWidth, boardHeight := boardSize(screen)
-					view.Quest = NewQuestState(mode, view.GameTime, s.Random, boardWidth, boardHeight)
+					view.Quest = NewQuestState(mode, now, s.Random, boardWidth, boardHeight)
 					updateViewHeat(&view, now)
 					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 					render(screen, view)
@@ -315,6 +324,7 @@ func (s Shell) Run(ctx context.Context) error {
 					view.Clock.Stop(now)
 					updateViewGameTime(&view, now)
 					updateViewHeat(&view, now)
+					s.syncPanePause(&view)
 				} else {
 					view.Pause.Resize = false
 					view.Quest.ResizeObjects(game)
@@ -324,6 +334,7 @@ func (s Shell) Run(ctx context.Context) error {
 						view.Clock.Start(now)
 					}
 					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
+					s.syncPanePause(&view)
 				}
 				render(screen, view)
 			}
@@ -332,6 +343,9 @@ func (s Shell) Run(ctx context.Context) error {
 			focusChanged, focusResumed := false, false
 			if !now.Before(view.NextFocusCheck) {
 				focusChanged, focusResumed = s.syncFocus(&view, now, true)
+				if focusChanged {
+					s.syncPanePause(&view)
+				}
 			}
 			clockStarted, _ := s.syncPlayClock(&view, now)
 			updateViewGameTime(&view, now)
@@ -350,6 +364,9 @@ func (s Shell) Run(ctx context.Context) error {
 					continue
 				}
 				stepFocusChanged, stepFocusResumed := s.syncFocus(&view, now, true)
+				if stepFocusChanged {
+					s.syncPanePause(&view)
+				}
 				if stepFocusResumed {
 					nextMove = now.Add(activeMoveInterval(view, gameIntervalOverride, view.GameTime))
 				}
@@ -388,6 +405,7 @@ func (s Shell) Run(ctx context.Context) error {
 			state = mergeTerminalState(view.State, state)
 			view.State = state
 			view.SessionState = state.Status
+			view.NoColor = state.NoColor
 			if session.IsTerminalStatus(state.Status) {
 				now := s.now()
 				if view.Completion != CompletionContinue {
@@ -395,10 +413,13 @@ func (s Shell) Run(ctx context.Context) error {
 				}
 				updateViewGameTime(&view, now)
 				updateViewHeat(&view, now)
-				freezeCommandHeat(&view)
+				if view.Completion != CompletionContinue {
+					freezeCommandHeat(&view)
+				}
 				if shouldOfferCompletionDecision(&view) {
 					view.Completion = CompletionUndecided
 					view.Pause.Completion = true
+					s.syncPanePause(&view)
 					if view.Game != nil {
 						view.Game.ClearPendingDirections()
 					}
@@ -410,9 +431,52 @@ func (s Shell) Run(ctx context.Context) error {
 				}
 			}
 			updateViewHeat(&view, s.now())
+			s.syncCommandPreview(&view)
 			render(screen, view)
 		}
 	}
+}
+
+func (s Shell) syncInitialScreen(screen tcell.Screen, events <-chan tcell.Event) {
+	screen.Sync()
+	delay := s.initialRenderDelay(screen)
+	if delay <= 0 {
+		return
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	pending := []tcell.Event{}
+	defer func() {
+		for _, event := range pending {
+			_ = screen.PostEvent(event)
+		}
+	}()
+	for {
+		select {
+		case <-timer.C:
+			screen.Sync()
+			return
+		case event := <-events:
+			if _, ok := event.(*tcell.EventResize); ok {
+				screen.Sync()
+				continue
+			}
+			pending = append(pending, event)
+		}
+	}
+}
+
+func (s Shell) initialRenderDelay(screen tcell.Screen) time.Duration {
+	if s.InitialRenderDelay != 0 {
+		if s.InitialRenderDelay < 0 {
+			return 0
+		}
+		return s.InitialRenderDelay
+	}
+	if _, ok := screen.(tcell.SimulationScreen); ok {
+		return 0
+	}
+	return defaultInitialRenderDelay
 }
 
 func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time) StepResult {
@@ -433,8 +497,15 @@ func stepGame(game *SnakeGame, quest *QuestState, heat HeatLevel, now time.Time)
 		return result
 	}
 	if quest.Enabled() && quest.Golden.Active && game.NextPoint() == quest.Golden.Position {
+		extraOccupied := []Point{game.Food}
+		if quest.Pickup.Active {
+			extraOccupied = append(extraOccupied, quest.Pickup.Position)
+		}
 		result := game.StepGrow()
 		if result == StepAteFood {
+			// StepGrow preserves the tail for the Golden Byte move, so the
+			// explicit tail growth completes the documented total reward.
+			game.GrowTail(goldenByteGrowth-1, extraOccupied)
 			quest.OnGoldenByte(game, heat, now)
 			quest.EnsureFood(game)
 		}
@@ -513,26 +584,6 @@ func shouldOfferCompletionDecision(view *viewState) bool {
 		!view.Game.Over
 }
 
-func finalizeCompletionQuit(view *viewState, manager StatsManager) {
-	view.Frozen = true
-	if shouldFinalizeCompletionQuit(view) {
-		finalizeRound(view, manager)
-	} else if !view.RoundFinalized {
-		refreshLeaderboard(view, manager)
-	}
-	updateQuestStats(view, manager)
-}
-
-func shouldFinalizeCompletionQuit(view *viewState) bool {
-	if view == nil || !view.Started || view.Game == nil || view.Game.Over {
-		return false
-	}
-	if view.SessionState == session.StatusCompleted {
-		return true
-	}
-	return currentRoundScore(view) > 0
-}
-
 func updateQuestStats(view *viewState, manager StatsManager) {
 	if view.Quest.Enabled() && view.RoundFinalized && !view.QuestStatsSaved {
 		if _, err := manager.UpdateQuest(view.FinalScore, view.Quest); err != nil {
@@ -563,13 +614,6 @@ func statsManagerOrDefault(manager StatsManager) StatsManager {
 		manager.BaseDir = DefaultStatsManager().BaseDir
 	}
 	return manager
-}
-
-func (s Shell) quit(view viewState) error {
-	if session.IsTerminalStatus(view.SessionState) && s.OnQuitTerminal != nil {
-		return s.OnQuitTerminal()
-	}
-	return nil
 }
 
 func finalizeRound(view *viewState, manager StatsManager) {
@@ -623,63 +667,52 @@ func refreshLeaderboard(view *viewState, manager StatsManager) {
 	view.Leaderboard = manager.Leaderboard(gameModeLabel(*view))
 }
 
-func (s Shell) handlePendingHighscoreKey(view *viewState, event *tcell.EventKey) (bool, bool) {
+func (s Shell) handlePendingHighscoreKey(view *viewState, event *tcell.EventKey) bool {
 	pending := view.PendingScore
 	if pending == nil {
-		return false, false
+		return false
 	}
 	switch event.Key() {
 	case tcell.KeyEnter:
 		confirmPendingHighscore(view, s.statsManager())
-		return false, true
+		return true
 	case tcell.KeyEscape:
-		if session.IsTerminalStatus(view.SessionState) {
-			confirmPendingHighscore(view, s.statsManager())
-			return true, true
-		}
-		return false, true
+		return true
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if pending.ReplaceOnType {
 			pending.Input = ""
 			pending.ReplaceOnType = false
-			return false, true
+			return true
 		}
 		runes := []rune(pending.Input)
 		if len(runes) > 0 {
 			pending.Input = string(runes[:len(runes)-1])
 		}
-		return false, true
+		return true
 	case tcell.KeyDelete:
 		pending.Input = ""
 		pending.ReplaceOnType = false
-		return false, true
+		return true
 	case tcell.KeyCtrlU:
 		pending.Input = ""
 		pending.ReplaceOnType = false
-		return false, true
+		return true
 	case tcell.KeyRune:
 		r := event.Rune()
-		if r == 'q' || r == 'Q' {
-			if session.IsTerminalStatus(view.SessionState) {
-				confirmPendingHighscore(view, s.statsManager())
-				return true, true
-			}
-			return false, true
-		}
 		if r == 'r' || r == 'R' || r == 'p' || r == 'P' {
-			return false, true
+			return true
 		}
 		if r < ' ' || r == '\u007f' {
-			return false, true
+			return true
 		}
 		if pending.ReplaceOnType {
 			pending.Input = ""
 			pending.ReplaceOnType = false
 		}
 		pending.Input = NormalizePlayerName(pending.Input + string(r))
-		return false, true
+		return true
 	default:
-		return false, true
+		return true
 	}
 }
 
@@ -730,6 +763,45 @@ func (s Shell) syncFocus(view *viewState, now time.Time, force bool) (changed bo
 		view.Game.ClearPendingDirections()
 	}
 	return true, !nextFocusPause
+}
+
+func (s Shell) syncPanePause(view *viewState) {
+	if s.UpdatePanePause == nil {
+		return
+	}
+	paused := view.Pause.Active()
+	if view.PanePauseKnown && view.PanePaused == paused {
+		return
+	}
+	if err := s.UpdatePanePause(paused); err != nil {
+		view.Message = err.Error()
+		return
+	}
+	view.PanePauseKnown = true
+	view.PanePaused = paused
+}
+
+func (s Shell) syncCommandPreview(view *viewState) bool {
+	if !view.State.Augmented {
+		if view.CommandPreview == "" {
+			return false
+		}
+		view.CommandPreview = ""
+		return true
+	}
+	if s.ReadCommandPreview == nil {
+		return false
+	}
+	preview, err := s.ReadCommandPreview()
+	if err != nil {
+		preview = ""
+	}
+	preview = formatCommandPreview(preview)
+	if preview == view.CommandPreview {
+		return false
+	}
+	view.CommandPreview = preview
+	return true
 }
 
 func (s Shell) syncPlayClock(view *viewState, now time.Time) (started bool, stopped bool) {
@@ -789,18 +861,22 @@ func render(screen tcell.Screen, view viewState) {
 		return
 	}
 
-	style := tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
-	titleStyle := style.Bold(true).Foreground(tcell.ColorAqua)
-	statusStyle := style.Foreground(statusColor(view.SessionState))
-	secondaryStyle := style.Foreground(tcell.ColorGray)
-	scoreStyle := style.Foreground(tcell.ColorGreen)
+	style := baseRenderStyle(view.NoColor)
+	titleStyle := colorStyle(style.Bold(true), view.NoColor, tcell.ColorAqua, tcell.ColorDefault)
+	statusStyle := colorStyle(style, view.NoColor, statusColor(view.SessionState), tcell.ColorDefault)
+	secondaryStyle := colorStyle(style, view.NoColor, tcell.ColorGray, tcell.ColorDefault)
+	scoreStyle := colorStyle(style, view.NoColor, tcell.ColorGreen, tcell.ColorDefault)
 
 	drawBox(screen, 0, 0, width, height, style)
-	drawPlayfield(screen, style)
+	drawPlayfield(screen, style, view.NoColor)
 
+	commandLine := "Command state: " + displayState(view.SessionState)
+	if view.CommandPreview != "" {
+		commandLine = view.CommandPreview
+	}
 	lines := []renderLine{
 		{y: 0, text: "Sidequest Snake [" + gameModeLabel(view) + "]", style: titleStyle, centered: true},
-		{y: 1, text: "Command state: " + displayState(view.SessionState), style: statusStyle, centered: true},
+		{y: 1, text: commandLine, style: statusStyle, centered: true},
 		{y: 2, text: heatScoreLine(view), style: scoreStyle, centered: true},
 		{y: 3, text: statusLine(view), style: secondaryStyle, centered: true},
 	}
@@ -815,9 +891,10 @@ func render(screen tcell.Screen, view viewState) {
 		lines = append(lines, renderLine{y: y, text: view.Message, style: secondaryStyle})
 	}
 
-	drawSnake(screen, view.Game, style)
-	drawGoldenByte(screen, view.Quest, style)
-	drawPickup(screen, view.Quest, style)
+	drawSnake(screen, view.Game, style, view.NoColor)
+	drawGoldenByte(screen, view.Quest, style, view.NoColor)
+	drawPickup(screen, view.Quest, style, view.NoColor)
+	drawGraphicsNotice(screen, view, style)
 	drawResultPanel(screen, view, style)
 	drawCompletionDecisionPanel(screen, view, style)
 	drawResizePausePanel(screen, view, style)
@@ -833,11 +910,39 @@ func render(screen tcell.Screen, view viewState) {
 	screen.Show()
 }
 
+func formatCommandPreview(preview string) string {
+	preview = strings.TrimSpace(preview)
+	if preview == "" {
+		return ""
+	}
+	return "CMD " + preview
+}
+
 type renderLine struct {
 	y        int
 	text     string
 	style    tcell.Style
 	centered bool
+}
+
+func baseRenderStyle(noColor bool) tcell.Style {
+	if noColor {
+		return tcell.StyleDefault
+	}
+	return tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
+}
+
+func colorStyle(style tcell.Style, noColor bool, foreground tcell.Color, background tcell.Color) tcell.Style {
+	if noColor {
+		return style
+	}
+	if foreground != tcell.ColorDefault {
+		style = style.Foreground(foreground)
+	}
+	if background != tcell.ColorDefault {
+		style = style.Background(background)
+	}
+	return style
 }
 
 func newSnakeGameForScreen(screen tcell.Screen) *SnakeGame {
@@ -860,7 +965,7 @@ func arenaForScreen(screen tcell.Screen) Arena {
 	return ArenaForScreen(width, height)
 }
 
-func drawPlayfield(screen tcell.Screen, style tcell.Style) {
+func drawPlayfield(screen tcell.Screen, style tcell.Style, noColor bool) {
 	width, height := screen.Size()
 	arena := arenaForScreen(screen)
 	topWallY := arena.Y - 1
@@ -871,8 +976,16 @@ func drawPlayfield(screen tcell.Screen, style tcell.Style) {
 		return
 	}
 
-	boardStyle := style.Background(tcell.ColorDarkSlateGray)
-	wallStyle := style.Foreground(tcell.ColorTeal).Background(tcell.ColorTeal).Bold(true)
+	boardStyle := colorStyle(style, noColor, tcell.ColorDefault, tcell.ColorDarkSlateGray)
+	asciiGraphics := asciiGraphicsEnabled()
+	wallStyle := colorStyle(style.Bold(true), noColor, tcell.ColorTeal, tcell.ColorTeal)
+	topWall := tcell.RuneBlock
+	sideWall := tcell.RuneBlock
+	if asciiGraphics {
+		wallStyle = colorStyle(style.Bold(true), noColor, tcell.ColorTeal, tcell.ColorDefault)
+		topWall = '='
+		sideWall = '|'
+	}
 
 	for y := arena.Y; y < arena.Y+arena.Height; y++ {
 		for x := arena.X; x < arena.X+arena.RenderWidth(); x++ {
@@ -880,26 +993,27 @@ func drawPlayfield(screen tcell.Screen, style tcell.Style) {
 		}
 	}
 	for x := leftWallX; x <= rightWallX; x++ {
-		screen.SetContent(x, topWallY, tcell.RuneBlock, nil, wallStyle)
-		screen.SetContent(x, bottomWallY, tcell.RuneBlock, nil, wallStyle)
+		screen.SetContent(x, topWallY, topWall, nil, wallStyle)
+		screen.SetContent(x, bottomWallY, topWall, nil, wallStyle)
 	}
 	for y := arena.Y; y < bottomWallY; y++ {
-		screen.SetContent(leftWallX, y, tcell.RuneBlock, nil, wallStyle)
-		screen.SetContent(rightWallX, y, tcell.RuneBlock, nil, wallStyle)
+		screen.SetContent(leftWallX, y, sideWall, nil, wallStyle)
+		screen.SetContent(rightWallX, y, sideWall, nil, wallStyle)
 	}
 }
 
-func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
+func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style, noColor bool) {
 	if game == nil {
 		return
 	}
 
 	arena := arenaForScreen(screen)
 	boardBackground := tcell.ColorDarkSlateGray
-	foodStyle := baseStyle.Foreground(tcell.ColorYellow).Background(boardBackground).Bold(true)
-	bodyStyle := baseStyle.Foreground(tcell.ColorLimeGreen).Background(boardBackground).Bold(true)
-	tailStyle := baseStyle.Foreground(tcell.ColorGreen).Background(boardBackground)
+	foodStyle := colorStyle(baseStyle.Bold(true), noColor, tcell.ColorYellow, boardBackground)
+	bodyStyle := colorStyle(baseStyle.Bold(true), noColor, tcell.ColorLimeGreen, boardBackground)
+	tailStyle := colorStyle(baseStyle, noColor, tcell.ColorGreen, boardBackground)
 	headStyle := bodyStyle.Bold(true)
+	asciiGraphics := asciiGraphicsEnabled()
 
 	if game.Food.X >= 0 && game.Food.X < arena.Width && game.Food.Y >= 0 && game.Food.Y < arena.Height {
 		drawCell(screen, arena, game.Food, "()", foodStyle)
@@ -918,11 +1032,47 @@ func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style) {
 			cell = "▒▒"
 			style = tailStyle
 		}
+		if asciiGraphics {
+			cell = "##"
+			if index == 0 {
+				cell = "@@"
+			} else if index == len(game.Snake)-1 {
+				cell = "--"
+			}
+		}
 		drawCell(screen, arena, point, cell, style)
 	}
 }
 
-func drawGoldenByte(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style) {
+func asciiGraphicsEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("SIDEQUEST_GRAPHICS")))
+	if value == "ascii" || value == "plain" {
+		return true
+	}
+	if value == "rich" || value == "unicode" {
+		return false
+	}
+	if truthyEnv(os.Getenv("SIDEQUEST_ASCII")) {
+		return true
+	}
+	for _, variable := range []string{"MOBAXTERM", "TERM_PROGRAM", "XTERM_VERSION", "LC_TERMINAL", "TERM"} {
+		if strings.Contains(strings.ToLower(os.Getenv(variable)), "moba") {
+			return true
+		}
+	}
+	return false
+}
+
+func truthyEnv(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func drawGoldenByte(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style, noColor bool) {
 	if !quest.Enabled() || !quest.Golden.Active {
 		return
 	}
@@ -931,11 +1081,11 @@ func drawGoldenByte(screen tcell.Screen, quest *QuestState, baseStyle tcell.Styl
 	if point.X < 0 || point.X >= arena.Width || point.Y < 0 || point.Y >= arena.Height {
 		return
 	}
-	style := baseStyle.Foreground(tcell.ColorOrange).Background(tcell.ColorDarkSlateGray).Bold(true)
+	style := colorStyle(baseStyle.Bold(true), noColor, tcell.ColorOrange, tcell.ColorDarkSlateGray)
 	drawCell(screen, arena, point, "<>", style)
 }
 
-func drawPickup(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style) {
+func drawPickup(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style, noColor bool) {
 	if !quest.Enabled() || !quest.Pickup.Active {
 		return
 	}
@@ -944,11 +1094,34 @@ func drawPickup(screen tcell.Screen, quest *QuestState, baseStyle tcell.Style) {
 	if point.X < 0 || point.X >= arena.Width || point.Y < 0 || point.Y >= arena.Height {
 		return
 	}
-	style := pickupStyle(baseStyle, quest.Pickup.Upgrade)
+	style := pickupStyle(baseStyle, quest.Pickup.Upgrade, noColor)
 	drawCell(screen, arena, point, PickupSymbol(quest.Pickup.Upgrade), style)
 }
 
-func pickupStyle(baseStyle tcell.Style, upgrade Upgrade) tcell.Style {
+func drawGraphicsNotice(screen tcell.Screen, view viewState, baseStyle tcell.Style) {
+	if view.GraphicsNotice == "" || view.Started || view.Game == nil || view.Game.Over || view.Frozen {
+		return
+	}
+	arena := arenaForScreen(screen)
+	if arena.RenderWidth() < 20 || arena.Height < 5 {
+		return
+	}
+	lines := []string{
+		view.GraphicsNotice,
+		"Set SIDEQUEST_GRAPHICS=rich for block graphics",
+		"Press Arrow Keys/WASD to play",
+	}
+	style := colorStyle(baseStyle.Bold(true), view.NoColor, tcell.ColorYellow, tcell.ColorDarkSlateGray)
+	startY := arena.Y + arena.Height/2 - len(lines)/2
+	for index, line := range lines {
+		drawCenteredText(screen, arena.X, startY+index, arena.RenderWidth(), line, style)
+	}
+}
+
+func pickupStyle(baseStyle tcell.Style, upgrade Upgrade, noColor bool) tcell.Style {
+	if noColor {
+		return baseStyle.Bold(true)
+	}
 	background := tcell.ColorDarkSlateGray
 	switch upgrade {
 	case UpgradeShield:
@@ -1025,8 +1198,8 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 	panelX := arena.X + (arena.RenderWidth()-panelWidth)/2
 	panelY := arena.Y + (arena.Height-panelHeight)/2
 
-	panelStyle := baseStyle.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
-	borderStyle := baseStyle.Foreground(accent).Background(tcell.ColorBlack).Bold(true)
+	panelStyle := colorStyle(baseStyle, view.NoColor, tcell.ColorWhite, tcell.ColorBlack)
+	borderStyle := colorStyle(baseStyle.Bold(true), view.NoColor, accent, tcell.ColorBlack)
 	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
 	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
 
@@ -1064,8 +1237,8 @@ func drawResizePausePanel(screen tcell.Screen, view viewState, baseStyle tcell.S
 	panelX := arena.X + (arena.RenderWidth()-panelWidth)/2
 	panelY := arena.Y + (arena.Height-panelHeight)/2
 
-	panelStyle := baseStyle.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
-	borderStyle := baseStyle.Foreground(tcell.ColorYellow).Background(tcell.ColorBlack).Bold(true)
+	panelStyle := colorStyle(baseStyle, view.NoColor, tcell.ColorWhite, tcell.ColorBlack)
+	borderStyle := colorStyle(baseStyle.Bold(true), view.NoColor, tcell.ColorYellow, tcell.ColorBlack)
 	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
 	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
 	for index, line := range lines {
@@ -1089,12 +1262,12 @@ func drawCompletionDecisionPanel(screen tcell.Screen, view viewState, baseStyle 
 		resultSummary(view.State),
 		fmt.Sprintf("Current Score  %d", score),
 		"",
-		"C Continue     Q Quit",
+		"C Continue     F10 Shell",
 	}
 	if arena.RenderWidth() < 34 {
 		lines = []string{
 			fmt.Sprintf("COMMAND FINISHED - Score %d", score),
-			"C Continue  Q Quit",
+			"C Continue  F10",
 		}
 	}
 
@@ -1112,9 +1285,9 @@ func drawCompletionDecisionPanel(screen tcell.Screen, view viewState, baseStyle 
 	panelX := arena.X + (arena.RenderWidth()-panelWidth)/2
 	panelY := arena.Y + (arena.Height-panelHeight)/2
 
-	panelStyle := baseStyle.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack)
-	borderStyle := baseStyle.Foreground(tcell.ColorAqua).Background(tcell.ColorBlack).Bold(true)
-	actionStyle := baseStyle.Foreground(tcell.ColorYellow).Background(tcell.ColorBlack).Bold(true)
+	panelStyle := colorStyle(baseStyle, view.NoColor, tcell.ColorWhite, tcell.ColorBlack)
+	borderStyle := colorStyle(baseStyle.Bold(true), view.NoColor, tcell.ColorAqua, tcell.ColorBlack)
+	actionStyle := colorStyle(baseStyle.Bold(true), view.NoColor, tcell.ColorYellow, tcell.ColorBlack)
 	fillRect(screen, panelX, panelY, panelWidth, panelHeight, ' ', panelStyle)
 	drawBox(screen, panelX, panelY, panelWidth, panelHeight, borderStyle)
 	for index, line := range lines {
@@ -1165,7 +1338,7 @@ func resultPanelLines(view viewState, maxWidth int) []string {
 	action := "R Restart     F9 Hide"
 	if view.Frozen {
 		title = "COMMAND FINISHED"
-		action = "Q Quit"
+		action = "F10 Shell"
 	}
 	if maxWidth < 34 {
 		lines := []string{
@@ -1295,12 +1468,7 @@ func updateViewHeat(view *viewState, now time.Time) bool {
 	if view.MaxHeat < commandHeat.Level {
 		view.MaxHeat = commandHeat.Level
 	}
-
-	activeLevel := commandHeat.Level
-	if view.RoundCatchUp {
-		activeLevel = RestartRampHeat(commandHeat.Level, view.RoundHeat, view.GameTime.Sub(view.RoundStarted))
-	}
-	view.Heat = HeatByLevel(activeLevel)
+	view.Heat = commandHeat
 
 	view.HeatNotice = ""
 	if !view.Frozen && !view.HeatFrozen {
@@ -1357,18 +1525,18 @@ func pauseLine(pause PauseState) string {
 func statusLine(view viewState) string {
 	if view.PendingScore != nil {
 		if session.IsTerminalStatus(view.SessionState) {
-			return "New high score. Type name  Enter confirm  Q save+exit"
+			return "New high score. Type name  Enter confirm  F10 shell"
 		}
 		return "New high score. Type name  Enter confirm  F9 hide"
 	}
 	if view.Completion == CompletionUndecided {
-		return "Command finished  C continue  Q quit  F9 hide  F10 detach"
+		return "Command finished  C continue  F9 hide  F10 shell"
 	}
 	if view.Frozen {
-		return "Command finished  Q quit  F9 hide  F10 detach"
+		return "Command finished  F9 hide  F10 shell"
 	}
 	if view.Game != nil && view.Game.Over {
-		return "Round over  R restart  F9 hide  F10 detach"
+		return "Round over  R restart  F9 hide  F10 shell"
 	}
 	if view.Pause.Active() {
 		return pauseLine(view.Pause)
@@ -1380,13 +1548,20 @@ func statusLine(view viewState) string {
 		return questLine(view)
 	}
 	if view.Started {
-		return "Arrows/WASD move  P pause  F9 hide  F10 detach  F12 command"
+		return "Arrows/WASD move  P pause  F9 hide  F10 shell  F12 command"
 	}
-	return "Arrows/WASD start  F9 hide  F12 command  F10 detach"
+	return "Arrows/WASD start  F9 hide  F12 command  F10 shell"
 }
 
 func heatTransitionText(heat HeatLevel) string {
 	return fmt.Sprintf("COMMAND HEAT RISING... SPEED %d  SCORE %s", heat.Level, heat.MultiplierText())
+}
+
+func initialGraphicsNotice() string {
+	if !asciiGraphicsEnabled() {
+		return ""
+	}
+	return "ASCII graphics mode"
 }
 
 func heatScoreLine(view viewState) string {

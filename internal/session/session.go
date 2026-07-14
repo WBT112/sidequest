@@ -55,6 +55,8 @@ type State struct {
 	TmuxSocket     string     `json:"tmux_socket,omitempty"`
 	GameMode       string     `json:"game_mode,omitempty"`
 	NoHistory      bool       `json:"no_history,omitempty"`
+	NoColor        bool       `json:"no_color,omitempty"`
+	Augmented      bool       `json:"augmented,omitempty"`
 }
 
 type Manager struct {
@@ -236,10 +238,18 @@ func WriteState(session Session, state State) error {
 	}
 	data = append(data, '\n')
 
-	file, err := os.OpenFile(session.StatePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, regularStateFilePerm)
+	dir := filepath.Dir(session.StatePath)
+	file, err := os.CreateTemp(dir, ".state-*.tmp")
 	if err != nil {
-		return fmt.Errorf("open session state: %w", err)
+		return fmt.Errorf("create temporary session state: %w", err)
 	}
+	tempPath := file.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tempPath)
+		}
+	}()
 
 	writeErr := func() error {
 		if _, err := file.Write(data); err != nil {
@@ -248,12 +258,16 @@ func WriteState(session Session, state State) error {
 		if err := file.Chmod(regularStateFilePerm); err != nil {
 			return err
 		}
-		return file.Close()
+		if err := file.Close(); err != nil {
+			return err
+		}
+		return os.Rename(tempPath, session.StatePath)
 	}()
 	if writeErr != nil {
 		_ = file.Close()
 		return fmt.Errorf("write session state: %w", writeErr)
 	}
+	committed = true
 
 	return nil
 }

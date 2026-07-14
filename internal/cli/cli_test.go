@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -60,6 +61,44 @@ func TestParseNoHistoryBeforeSeparator(t *testing.T) {
 	}
 }
 
+func TestParseNoColorBeforeSeparator(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	result, err := Parse([]string{"--no-color", "--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !result.Config.NoColor {
+		t.Fatal("NoColor = false, want true")
+	}
+	if result.Config.Executable != "sleep" {
+		t.Fatalf("Executable = %q, want sleep", result.Config.Executable)
+	}
+}
+
+func TestParseNoColorFromEnvironment(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	result, err := Parse([]string{"--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !result.Config.NoColor {
+		t.Fatal("NoColor = false, want true from NO_COLOR")
+	}
+}
+
+func TestParseAugmentedBeforeSeparator(t *testing.T) {
+	result, err := Parse([]string{"--aug", "--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !result.Config.Augmented {
+		t.Fatal("Augmented = false, want true")
+	}
+	if result.Config.Executable != "sleep" {
+		t.Fatalf("Executable = %q, want sleep", result.Config.Executable)
+	}
+}
+
 func TestParseRejectsUnknownMode(t *testing.T) {
 	_, err := Parse([]string{"--mode", "arena", "--", "true"})
 	if err == nil || !strings.Contains(err.Error(), "unknown mode") {
@@ -108,6 +147,20 @@ func TestParseRejectsUnknownSidequestOption(t *testing.T) {
 	}
 }
 
+func TestParseRejectsUnexpectedArgumentBeforeSeparator(t *testing.T) {
+	_, err := Parse([]string{"qest", "--", "make", "test"})
+	if err == nil || !strings.Contains(err.Error(), `unexpected argument "qest" before --`) {
+		t.Fatalf("Parse error = %v, want unexpected argument before separator", err)
+	}
+}
+
+func TestParseRejectsMultipleUnexpectedArgumentsBeforeSeparator(t *testing.T) {
+	_, err := Parse([]string{"foo", "bar", "--", "true"})
+	if err == nil || !strings.Contains(err.Error(), `unexpected argument "foo" before --`) {
+		t.Fatalf("Parse error = %v, want first unexpected argument before separator", err)
+	}
+}
+
 func TestParseRejectsMissingSeparator(t *testing.T) {
 	_, err := Parse([]string{"sleep", "1"})
 	if !errors.Is(err, ErrMissingSeparator) {
@@ -135,7 +188,7 @@ func TestRunHelpDocumentsSeparator(t *testing.T) {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
 
-	for _, want := range []string{"sidequest [options] -- <command> [arguments...]", "--no-history"} {
+	for _, want := range []string{"sidequest [options] -- <command> [arguments...]", "--no-history", "--no-color", "--aug"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help output missing %q:\n%s", want, out.String())
 		}
@@ -165,6 +218,68 @@ func TestRunCommandStoresNoHistoryChoice(t *testing.T) {
 	}
 
 	code := app.Run([]string{"--no-history", "--", "true"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+}
+
+func TestRunCommandStoresNoColorChoice(t *testing.T) {
+	var out bytes.Buffer
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("no-color")}
+	app := App{
+		Out:       &out,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			return manager.Create()
+		},
+		RunLayout: func(gotSession session.Session, gotCommand session.Command) error {
+			state, err := session.ReadState(gotSession)
+			if err != nil {
+				t.Fatalf("ReadState returned error: %v", err)
+			}
+			if !state.NoColor {
+				t.Fatal("NoColor = false, want true")
+			}
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"--no-color", "--", "true"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+}
+
+func TestRunCommandStoresAugmentedChoice(t *testing.T) {
+	var out bytes.Buffer
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("augmented")}
+	app := App{
+		Out:       &out,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			return manager.Create()
+		},
+		RunLayout: func(gotSession session.Session, gotCommand session.Command) error {
+			state, err := session.ReadState(gotSession)
+			if err != nil {
+				t.Fatalf("ReadState returned error: %v", err)
+			}
+			if !state.Augmented {
+				t.Fatal("Augmented = false, want true")
+			}
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"--aug", "--", "true"})
 	if code != 0 {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
@@ -301,6 +416,456 @@ func TestRunCommandStoresSelectedGameMode(t *testing.T) {
 	}
 }
 
+func TestRunCommandRejectsMissingPATHExecutableBeforeCreatingSession(t *testing.T) {
+	var stderr bytes.Buffer
+	createSessionCalled := false
+	app := App{
+		Err: &stderr,
+		Preflight: func() error {
+			t.Fatal("Preflight should not run for missing command")
+			return nil
+		},
+		CreateSession: func() (session.Session, error) {
+			createSessionCalled = true
+			return session.Session{}, nil
+		},
+	}
+
+	code := app.Run([]string{"--", "sidequest-command-that-does-not-exist"})
+	if code != 127 {
+		t.Fatalf("Run exit code = %d, want 127", code)
+	}
+	if createSessionCalled {
+		t.Fatal("CreateSession was called after missing command validation")
+	}
+	if !strings.Contains(stderr.String(), "command not found: sidequest-command-that-does-not-exist") {
+		t.Fatalf("stderr = %q, want command not found", stderr.String())
+	}
+}
+
+func TestRunCommandRejectsMissingExplicitPathBeforeCreatingSession(t *testing.T) {
+	var stderr bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "missing-script")
+	app := App{
+		Err:       &stderr,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			t.Fatal("CreateSession should not run for missing explicit path")
+			return session.Session{}, nil
+		},
+	}
+
+	code := app.Run([]string{"--", missing})
+	if code != 127 {
+		t.Fatalf("Run exit code = %d, want 127", code)
+	}
+	if !strings.Contains(stderr.String(), "command not found: "+missing) {
+		t.Fatalf("stderr = %q, want explicit missing path", stderr.String())
+	}
+}
+
+func TestRunCommandRejectsDirectoryAndNonExecutableBeforeCreatingSession(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	for _, test := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "directory", path: dir, want: "is a directory"},
+		{name: "non-executable", path: script, want: "permission denied"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			app := App{
+				Err:       &stderr,
+				Preflight: func() error { return nil },
+				CreateSession: func() (session.Session, error) {
+					t.Fatal("CreateSession should not run for invalid executable")
+					return session.Session{}, nil
+				},
+			}
+
+			code := app.Run([]string{"--", test.path})
+			if code != 126 {
+				t.Fatalf("Run exit code = %d, want 126", code)
+			}
+			if !strings.Contains(stderr.String(), test.want) {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestRunCommandCleansRuntimeSessionWhenInitialStateUpdateFails(t *testing.T) {
+	var stderr bytes.Buffer
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("initial-state-fail")}
+	var runtimeSession session.Session
+
+	app := App{
+		Err:       &stderr,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			var err error
+			runtimeSession, err = manager.Create()
+			return runtimeSession, err
+		},
+		UpdateState: func(session.Session, time.Time, func(*session.State)) error {
+			return fmt.Errorf("write options failed")
+		},
+		RunLayout: func(session.Session, session.Command) error {
+			t.Fatal("RunLayout should not start after initial state failure")
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"--mode=quest", "--", "true"})
+	if code != 2 {
+		t.Fatalf("Run exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "write options failed") {
+		t.Fatalf("stderr = %q, want original state update error", stderr.String())
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+}
+
+func TestRunCommandCustomLayoutFailureCleansRuntimeSession(t *testing.T) {
+	var stderr bytes.Buffer
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("custom-layout-fail")}
+	var runtimeSession session.Session
+
+	app := App{
+		Err:       &stderr,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			var err error
+			runtimeSession, err = manager.Create()
+			return runtimeSession, err
+		},
+		RunLayout: func(session.Session, session.Command) error {
+			return fmt.Errorf("layout failed")
+		},
+	}
+
+	code := app.Run([]string{"--", "true"})
+	if code != 2 {
+		t.Fatalf("Run exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "layout failed") {
+		t.Fatalf("stderr = %q, want original layout error", stderr.String())
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutStartFailureCleansRuntimeSessionAndCommandSocket(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "layout-start-fail")
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return tmux.Info{}, fmt.Errorf("start layout failed")
+		},
+		CloseTmux: func(tmux.Info) error {
+			t.Fatal("CloseTmux should not run before layout ownership is established")
+			return nil
+		},
+	}
+
+	err := app.runLayout(runtimeSession, session.Command{Executable: "true"})
+	if err == nil || !strings.Contains(err.Error(), "start layout failed") {
+		t.Fatalf("runLayout error = %v, want original start error", err)
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+	assertSocketRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutStateMetadataFailureClosesOwnedTmuxAndCleansRuntimeSession(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "state-metadata-fail")
+	ownedInfo := tmux.Info{SocketName: "sidequest-state-metadata-fail", SessionName: "sidequest-state-metadata-fail"}
+	var closed []tmux.Info
+
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return ownedInfo, nil
+		},
+		UpdateState: func(session.Session, time.Time, func(*session.State)) error {
+			return fmt.Errorf("store tmux metadata failed")
+		},
+		CloseTmux: func(info tmux.Info) error {
+			closed = append(closed, info)
+			return nil
+		},
+	}
+
+	err := app.runLayout(runtimeSession, session.Command{Executable: "true"})
+	if err == nil || !strings.Contains(err.Error(), "store tmux metadata failed") {
+		t.Fatalf("runLayout error = %v, want original metadata error", err)
+	}
+	if got, want := closed, []tmux.Info{ownedInfo}; !equalTmuxInfos(got, want) {
+		t.Fatalf("closed tmux = %#v, want %#v", got, want)
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutStartupFailureDoesNotCloseUnownedTmuxInfo(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "unowned-tmux")
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return tmux.Info{SocketName: "external", SessionName: "external"}, nil
+		},
+		ServeCommand: func(context.Context, *session.CommandListener, session.Command) (session.CommandStartup, error) {
+			return session.CommandStartup{}, fmt.Errorf("command handoff failed")
+		},
+		CloseTmux: func(tmux.Info) error {
+			t.Fatal("CloseTmux should not run for unowned tmux metadata")
+			return nil
+		},
+	}
+
+	err := app.runLayout(runtimeSession, session.Command{Executable: "true"})
+	if err == nil || !strings.Contains(err.Error(), "command handoff failed") {
+		t.Fatalf("runLayout error = %v, want original handoff error", err)
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutCommandHandoffFailureClosesOwnedTmuxCleansRuntimeSessionAndSocket(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "handoff-fail")
+	ownedInfo := tmux.Info{SocketName: "sidequest-handoff-fail", SessionName: "sidequest-handoff-fail"}
+	var closed []tmux.Info
+
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return ownedInfo, nil
+		},
+		ServeCommand: func(context.Context, *session.CommandListener, session.Command) (session.CommandStartup, error) {
+			return session.CommandStartup{}, fmt.Errorf("command handoff failed")
+		},
+		CloseTmux: func(info tmux.Info) error {
+			closed = append(closed, info)
+			return nil
+		},
+	}
+
+	err := app.runLayout(runtimeSession, session.Command{Executable: "true"})
+	if err == nil || !strings.Contains(err.Error(), "command handoff failed") {
+		t.Fatalf("runLayout error = %v, want original handoff error", err)
+	}
+	if got, want := closed, []tmux.Info{ownedInfo}; !equalTmuxInfos(got, want) {
+		t.Fatalf("closed tmux = %#v, want %#v", got, want)
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+	assertSocketRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutStartFailedStatusClosesOwnedTmuxAndReturnsCommandExitCode(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "start-status-fail")
+	ownedInfo := tmux.Info{SocketName: "sidequest-start-status-fail", SessionName: "sidequest-start-status-fail"}
+	var closed []tmux.Info
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return ownedInfo, nil
+		},
+		ServeCommand: func(context.Context, *session.CommandListener, session.Command) (session.CommandStartup, error) {
+			return session.CommandStartup{Status: session.CommandStartupStartFailed, Error: "fork/exec ./bad: no such file or directory"}, nil
+		},
+		TmuxHasSession: func(tmux.Info) bool { return true },
+		CapturePane: func(tmux.Info) (string, bool, error) {
+			return "", false, nil
+		},
+		CloseTmux: func(info tmux.Info) error {
+			closed = append(closed, info)
+			return nil
+		},
+	}
+
+	err := app.runLayout(runtimeSession, session.Command{Executable: "true"})
+	if err == nil || !strings.Contains(err.Error(), "fork/exec ./bad") {
+		t.Fatalf("runLayout error = %v, want start failure", err)
+	}
+	if got := exitCodeForError(err); got != 127 {
+		t.Fatalf("exit code = %d, want 127", got)
+	}
+	if got, want := closed, []tmux.Info{ownedInfo}; !equalTmuxInfos(got, want) {
+		t.Fatalf("closed tmux = %#v, want %#v", got, want)
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutImmediateZeroExitCleansOwnedResourcesWithoutAttach(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "startup-zero")
+	ownedInfo := tmux.Info{SocketName: "sidequest-startup-zero", SessionName: "sidequest-startup-zero"}
+	var closed []tmux.Info
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return ownedInfo, nil
+		},
+		ServeCommand: func(context.Context, *session.CommandListener, session.Command) (session.CommandStartup, error) {
+			exitCode := 0
+			return session.CommandStartup{Status: session.CommandStartupCompleted, ExitCode: &exitCode}, nil
+		},
+		AttachLayout: func(tmux.Info) error {
+			t.Fatal("AttachLayout should not run after immediate command exit")
+			return nil
+		},
+		TmuxHasSession: func(tmux.Info) bool { return true },
+		CapturePane: func(tmux.Info) (string, bool, error) {
+			return "", false, nil
+		},
+		CloseTmux: func(info tmux.Info) error {
+			closed = append(closed, info)
+			return nil
+		},
+	}
+
+	if err := app.runLayout(runtimeSession, session.Command{Executable: "true"}); err != nil {
+		t.Fatalf("runLayout returned error: %v", err)
+	}
+	if got, want := closed, []tmux.Info{ownedInfo}; !equalTmuxInfos(got, want) {
+		t.Fatalf("closed tmux = %#v, want %#v", got, want)
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutImmediateNonZeroExitCleansOwnedResourcesAndReturnsExitCode(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "startup-exit7")
+	ownedInfo := tmux.Info{SocketName: "sidequest-startup-exit7", SessionName: "sidequest-startup-exit7"}
+	var closed []tmux.Info
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return ownedInfo, nil
+		},
+		ServeCommand: func(context.Context, *session.CommandListener, session.Command) (session.CommandStartup, error) {
+			exitCode := 7
+			return session.CommandStartup{Status: session.CommandStartupFailed, ExitCode: &exitCode}, nil
+		},
+		AttachLayout: func(tmux.Info) error {
+			t.Fatal("AttachLayout should not run after immediate command exit")
+			return nil
+		},
+		TmuxHasSession: func(tmux.Info) bool { return true },
+		CapturePane: func(tmux.Info) (string, bool, error) {
+			return "", false, nil
+		},
+		CloseTmux: func(info tmux.Info) error {
+			closed = append(closed, info)
+			return nil
+		},
+	}
+
+	err := app.runLayout(runtimeSession, session.Command{Executable: "true"})
+	if err == nil || !strings.Contains(err.Error(), "status 7") {
+		t.Fatalf("runLayout error = %v, want startup exit status", err)
+	}
+	if got := exitCodeForError(err); got != 7 {
+		t.Fatalf("exit code = %d, want 7", got)
+	}
+	if got, want := closed, []tmux.Info{ownedInfo}; !equalTmuxInfos(got, want) {
+		t.Fatalf("closed tmux = %#v, want %#v", got, want)
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutAttachFailureClosesOwnedTmuxAndCleansRuntimeSession(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "attach-fail")
+	ownedInfo := tmux.Info{SocketName: "sidequest-attach-fail", SessionName: "sidequest-attach-fail"}
+	var closed []tmux.Info
+
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return ownedInfo, nil
+		},
+		ServeCommand: func(context.Context, *session.CommandListener, session.Command) (session.CommandStartup, error) {
+			return session.CommandStartup{Status: session.CommandStartupStarted}, nil
+		},
+		AttachLayout: func(tmux.Info) error {
+			return fmt.Errorf("attach failed")
+		},
+		CloseTmux: func(info tmux.Info) error {
+			closed = append(closed, info)
+			return nil
+		},
+	}
+
+	err := app.runLayout(runtimeSession, session.Command{Executable: "true"})
+	if err == nil || !strings.Contains(err.Error(), "attach failed") {
+		t.Fatalf("runLayout error = %v, want original attach error", err)
+	}
+	if got, want := closed, []tmux.Info{ownedInfo}; !equalTmuxInfos(got, want) {
+		t.Fatalf("closed tmux = %#v, want %#v", got, want)
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutFinalStateReadFailureClosesOwnedTmuxAndCleansRuntimeSession(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "final-read-fail")
+	ownedInfo := tmux.Info{SocketName: "sidequest-final-read-fail", SessionName: "sidequest-final-read-fail"}
+	var closed []tmux.Info
+
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return ownedInfo, nil
+		},
+		ServeCommand: func(context.Context, *session.CommandListener, session.Command) (session.CommandStartup, error) {
+			return session.CommandStartup{Status: session.CommandStartupStarted}, nil
+		},
+		AttachLayout: func(tmux.Info) error {
+			return nil
+		},
+		ReadState: func(session.Session) (session.State, error) {
+			return session.State{}, fmt.Errorf("read final state failed")
+		},
+		CloseTmux: func(info tmux.Info) error {
+			closed = append(closed, info)
+			return nil
+		},
+	}
+
+	err := app.runLayout(runtimeSession, session.Command{Executable: "true"})
+	if err == nil || !strings.Contains(err.Error(), "read final state failed") {
+		t.Fatalf("runLayout error = %v, want original read error", err)
+	}
+	if got, want := closed, []tmux.Info{ownedInfo}; !equalTmuxInfos(got, want) {
+		t.Fatalf("closed tmux = %#v, want %#v", got, want)
+	}
+	assertSessionDirRemoved(t, runtimeSession)
+}
+
+func TestRunLayoutPreservesRunningSessionAfterSuccessfulAttach(t *testing.T) {
+	runtimeSession := createCLITestSession(t, "still-running")
+	ownedInfo := tmux.Info{SocketName: "sidequest-still-running", SessionName: "sidequest-still-running"}
+	app := App{
+		StartLayout: func(session.Session, []string, []string) (tmux.Info, error) {
+			return ownedInfo, nil
+		},
+		ServeCommand: func(context.Context, *session.CommandListener, session.Command) (session.CommandStartup, error) {
+			return session.CommandStartup{Status: session.CommandStartupStarted}, nil
+		},
+		AttachLayout: func(tmux.Info) error {
+			return nil
+		},
+		CloseTmux: func(tmux.Info) error {
+			t.Fatal("CloseTmux should not run for a detached running session")
+			return nil
+		},
+		CleanupSession: func(session.Session) error {
+			t.Fatal("CleanupSession should not run for a detached running session")
+			return nil
+		},
+	}
+
+	if err := app.runLayout(runtimeSession, session.Command{Executable: "true"}); err != nil {
+		t.Fatalf("runLayout returned error: %v", err)
+	}
+	if _, err := session.ReadState(runtimeSession); err != nil {
+		t.Fatalf("running session was removed: %v", err)
+	}
+}
+
 func TestRunCommandRunnerReceivesAndExecsCommand(t *testing.T) {
 	var executed session.Command
 	app := App{
@@ -372,6 +937,9 @@ func TestRunGameShellConfiguresProductionRandomSource(t *testing.T) {
 	}
 	if captured.ReadFocus == nil {
 		t.Fatal("game shell ReadFocus = nil")
+	}
+	if captured.ReadCommandPreview == nil {
+		t.Fatal("game shell ReadCommandPreview = nil")
 	}
 }
 
@@ -925,4 +1493,50 @@ func fixedID(id string) func() (string, error) {
 	return func() (string, error) {
 		return id, nil
 	}
+}
+
+func createCLITestSession(t *testing.T, id string) session.Session {
+	t.Helper()
+	base, err := os.MkdirTemp("", "sq-cli-")
+	if err != nil {
+		t.Fatalf("MkdirTemp returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(base)
+	})
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID(id)}
+	runtimeSession, err := manager.Create()
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	return runtimeSession
+}
+
+func assertSessionDirRemoved(t *testing.T, runtimeSession session.Session) {
+	t.Helper()
+	if runtimeSession.Dir == "" {
+		t.Fatal("runtimeSession.Dir is empty")
+	}
+	if _, err := os.Stat(runtimeSession.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runtime dir stat error = %v, want not exist", err)
+	}
+}
+
+func assertSocketRemoved(t *testing.T, runtimeSession session.Session) {
+	t.Helper()
+	if _, err := os.Stat(runtimeSession.SocketPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("socket stat error = %v, want not exist", err)
+	}
+}
+
+func equalTmuxInfos(a, b []tmux.Info) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for index := range a {
+		if a[index] != b[index] {
+			return false
+		}
+	}
+	return true
 }

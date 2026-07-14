@@ -143,6 +143,27 @@ func TestRetentionKeepsNewestRuns(t *testing.T) {
 	}
 }
 
+func TestDefaultRetentionKeepsNewestHundredRuns(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "state", "sidequest")
+	manager := Manager{BaseDir: base, UID: os.Getuid()}
+	start := time.Date(2026, 7, 11, 18, 0, 0, 0, time.UTC)
+	for index := 0; index < DefaultRetentionLimit+1; index++ {
+		id := "run-" + strings.Repeat("a", index/26) + string(rune('a'+index%26))
+		storeRun(t, manager, id, start.Add(time.Duration(index)*time.Minute), id+"\n")
+	}
+
+	runs, err := manager.List()
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(runs) != DefaultRetentionLimit {
+		t.Fatalf("len(runs) = %d, want %d", len(runs), DefaultRetentionLimit)
+	}
+	if _, err := os.Stat(filepath.Join(base, "runs", "run-a")); !os.IsNotExist(err) {
+		t.Fatalf("oldest run stat error = %v, want not exist", err)
+	}
+}
+
 func TestStoreRejectsSymlinkStateRoot(t *testing.T) {
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "target")
