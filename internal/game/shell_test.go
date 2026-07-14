@@ -899,7 +899,7 @@ func TestRunShowsCenteredResultPanelAfterRoundOver(t *testing.T) {
 	waitForRenderedText(t, screen, "NEW HIGH SCORE")
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
 	waitForRenderedText(t, screen, "GAME OVER")
-	waitForRenderedText(t, screen, "FINAL SCORE  0")
+	waitForRenderedText(t, screen, "FINAL SCORE")
 	waitForRenderedText(t, screen, "TOP 5")
 	waitForRenderedText(t, screen, "R Restart")
 	cancelShell(t, cancel, errc)
@@ -1324,6 +1324,75 @@ func TestRenderDrawsMonochromeQuestObjectsAndResultPanel(t *testing.T) {
 	assertScreenHasNoColors(t, screen)
 }
 
+func TestResultPanelLinesShowFullLeaderboardWhenTall(t *testing.T) {
+	view := viewState{
+		ResultScore:    920,
+		RoundFinalized: true,
+		Leaderboard: []LeaderboardEntry{
+			{Score: 920, PlayerName: "one"},
+			{Score: 800, PlayerName: "two"},
+			{Score: 700, PlayerName: "three"},
+			{Score: 600, PlayerName: "four"},
+			{Score: 500, PlayerName: "five"},
+		},
+		CurrentRank: 1,
+	}
+
+	lines := resultPanelLines(view, 78, 13)
+
+	for _, want := range []string{"GAME OVER", "FINAL SCORE  920", "TOP 5", "5.", "R Restart", "F10 Shell"} {
+		if !linesContain(lines, want) {
+			t.Fatalf("result panel lines missing %q: %#v", want, lines)
+		}
+	}
+	if len(lines) > 11 {
+		t.Fatalf("result panel lines len=%d, want at most 11: %#v", len(lines), lines)
+	}
+}
+
+func TestResultPanelLinesKeepActionsVisibleWhenShort(t *testing.T) {
+	view := viewState{
+		ResultScore:    920,
+		RoundFinalized: true,
+		Leaderboard: []LeaderboardEntry{
+			{Score: 920, PlayerName: "one"},
+			{Score: 800, PlayerName: "two"},
+			{Score: 700, PlayerName: "three"},
+			{Score: 600, PlayerName: "four"},
+			{Score: 500, PlayerName: "five"},
+		},
+		CurrentRank: 1,
+	}
+
+	lines := resultPanelLines(view, 78, 8)
+
+	for _, want := range []string{"GAME OVER", "SCORE 920", "R Restart", "F10 Shell"} {
+		if !linesContain(lines, want) {
+			t.Fatalf("compact result panel lines missing %q: %#v", want, lines)
+		}
+	}
+	if len(lines) > 6 {
+		t.Fatalf("compact result panel lines len=%d, want at most 6: %#v", len(lines), lines)
+	}
+}
+
+func TestResultPanelLinesKeepHighscoreInputVisibleWhenShort(t *testing.T) {
+	view := viewState{
+		PendingScore: &PendingHighscore{Score: 920, Input: "mcfeuer"},
+	}
+
+	lines := resultPanelLines(view, 78, 8)
+
+	for _, want := range []string{"NEW HIGH SCORE 920", "NAME [mcfeuer]", "Enter confirm"} {
+		if !linesContain(lines, want) {
+			t.Fatalf("compact highscore lines missing %q: %#v", want, lines)
+		}
+	}
+	if len(lines) > 6 {
+		t.Fatalf("compact highscore lines len=%d, want at most 6: %#v", len(lines), lines)
+	}
+}
+
 func runShellCancellable(shell Shell) (context.CancelFunc, chan error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
@@ -1339,6 +1408,15 @@ func cancelShell(t *testing.T, cancel context.CancelFunc, errc <-chan error) {
 	if err := <-errc; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run returned error %v, want context canceled", err)
 	}
+}
+
+func linesContain(lines []string, want string) bool {
+	for _, line := range lines {
+		if strings.Contains(line, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func waitForRenderedText(t *testing.T, screen tcell.SimulationScreen, want string) {

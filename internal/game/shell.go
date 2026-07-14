@@ -1168,7 +1168,7 @@ func drawResultPanel(screen tcell.Screen, view viewState, baseStyle tcell.Style)
 		return
 	}
 
-	lines := resultPanelLines(view, arena.RenderWidth())
+	lines := resultPanelLines(view, arena.RenderWidth(), arena.Height)
 	if len(lines) == 0 {
 		return
 	}
@@ -1305,7 +1305,7 @@ func drawCompletionDecisionPanel(screen tcell.Screen, view viewState, baseStyle 
 	}
 }
 
-func resultPanelLines(view viewState, maxWidth int) []string {
+func resultPanelLines(view viewState, maxWidth int, maxHeight int) []string {
 	score := view.ResultScore
 	if score == 0 && view.PendingScore == nil && !view.RoundFinalized {
 		if view.Quest.Enabled() && view.FinalScore.FinalScore > 0 {
@@ -1314,8 +1314,12 @@ func resultPanelLines(view viewState, maxWidth int) []string {
 			score = view.Game.Score
 		}
 	}
+	maxContentLines := maxHeight - 2
+	if maxContentLines < 1 {
+		maxContentLines = 1
+	}
 	if view.PendingScore != nil {
-		if maxWidth < 34 {
+		if maxWidth < 34 || maxContentLines < 8 {
 			return []string{
 				fmt.Sprintf("NEW HIGH SCORE %d", view.PendingScore.Score),
 				"NAME [" + truncateDisplay(view.PendingScore.Input, maxWidth-8) + "]",
@@ -1335,17 +1339,27 @@ func resultPanelLines(view viewState, maxWidth int) []string {
 	}
 
 	title := "GAME OVER"
-	action := "R Restart     F9 Hide"
+	action := "R Restart     F10 Shell"
 	if view.Frozen {
 		title = "COMMAND FINISHED"
 		action = "F10 Shell"
 	}
-	if maxWidth < 34 {
+	if maxWidth < 34 || maxContentLines < 11 {
 		lines := []string{
 			title,
-			fmt.Sprintf("%d", score),
+			fmt.Sprintf("SCORE %d", score),
 		}
-		lines = append(lines, leaderboardLines(view.Leaderboard, view.CurrentRank, maxWidth-2)...)
+		entrySlots := maxContentLines - len(lines) - 1
+		if view.StatsMessage != "" {
+			entrySlots--
+		}
+		if entrySlots > 0 {
+			entries := leaderboardLines(view.Leaderboard, view.CurrentRank, maxWidth-2)
+			if len(entries) > entrySlots {
+				entries = entries[:entrySlots]
+			}
+			lines = append(lines, entries...)
+		}
 		lines = append(lines, action)
 		if view.StatsMessage != "" {
 			lines = append(lines, truncateDisplay(view.StatsMessage, maxWidth-2))

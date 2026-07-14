@@ -47,6 +47,13 @@ const commandPaneHistoryLimit = 100000
 const commandPanePreviewLines = 20
 
 const (
+	defaultGamePaneHeight = 16
+	// 24 arena rows plus HUD/top offset and the bottom wall.
+	gamePaneMaxHeight    = 30
+	commandPaneMinHeight = 6
+)
+
+const (
 	bossHiddenOption    = "@sidequest_boss_hidden"
 	bossPrevGameOption  = "@sidequest_boss_prev_game"
 	gamePausedOption    = "@sidequest_game_paused"
@@ -99,9 +106,11 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	}
 	ui := uiPresetForSession(runtimeSession)
 
+	terminalRows := 0
 	newSessionArgs := []string{"new-session", "-d"}
 	if columns, rows, err := l.currentTerminalSize(); err == nil && columns > 0 && rows > 0 {
 		newSessionArgs = append(newSessionArgs, "-x", strconv.Itoa(columns), "-y", strconv.Itoa(rows))
+		terminalRows = rows
 	}
 	newSessionArgs = append(newSessionArgs, "-s", info.SessionName, "-n", "sidequest", shellJoin(commandRunner))
 	if err := run(newSessionArgs...); err != nil {
@@ -154,11 +163,14 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 		return cleanup(fmt.Errorf("enable command pane remain-on-exit: %w", err))
 	}
 	runOptional("set-option", "-t", info.SessionName, "remain-on-exit-format", remainOnExitFormat)
-	if err := run("split-window", "-v", "-l", "16", "-t", info.SessionName+":0.0", shellJoin(gameRunner)); err != nil {
+	if err := run("split-window", "-v", "-l", strconv.Itoa(gamePaneHeightForWindow(terminalRows)), "-t", info.SessionName+":0.0", shellJoin(gameRunner)); err != nil {
 		return cleanup(fmt.Errorf("create placeholder pane: %w", err))
 	}
 	if err := run("select-pane", "-t", info.SessionName+":0.1", "-T", gamePaneTitle); err != nil {
 		return cleanup(fmt.Errorf("title game pane: %w", err))
+	}
+	if err := run("set-hook", "-t", info.SessionName, "window-resized", gamePaneResizeCommand(tmuxPath, info)); err != nil {
+		return cleanup(fmt.Errorf("configure game pane resize hook: %w", err))
 	}
 	if err := run("bind-key", "-n", "F12", "select-pane", "-t", ":.+"); err != nil {
 		return cleanup(fmt.Errorf("bind F12 pane switch: %w", err))
@@ -166,7 +178,7 @@ func (l Layout) Start(runtimeSession session.Session, commandRunner []string, ga
 	if err := run("bind-key", "-n", "F10", "detach-client"); err != nil {
 		return cleanup(fmt.Errorf("bind F10 detach: %w", err))
 	}
-	if err := run("bind-key", "-n", "F9", "if-shell", "-F", "#{==:#{"+bossHiddenOption+"},1}", bossRestoreCommand(info), bossHideCommand(info)); err != nil {
+	if err := run("bind-key", "-n", "F9", "if-shell", "-F", "#{==:#{"+bossHiddenOption+"},1}", bossRestoreCommand(tmuxPath, info), bossHideCommand(info)); err != nil {
 		return cleanup(fmt.Errorf("bind F9 boss key: %w", err))
 	}
 	for _, binding := range commandPaneScrollBindings() {
@@ -191,6 +203,38 @@ func (l Layout) currentTerminalSize() (columns int, rows int, err error) {
 		return 0, 0, err
 	}
 	return size.Columns, size.Rows, nil
+}
+
+func gamePaneHeightForWindow(windowHeight int) int {
+	if windowHeight <= 0 {
+		return defaultGamePaneHeight
+	}
+	maxAllowed := windowHeight - commandPaneMinHeight
+	if maxAllowed < 1 {
+		return 1
+	}
+	if maxAllowed < gamePaneMaxHeight {
+		return maxAllowed
+	}
+	return gamePaneMaxHeight
+}
+
+func gamePaneResizeCommand(tmuxPath string, info Info) string {
+	shell := fmt.Sprintf(
+		"h=#{window_height}; z=#{window_zoomed_flag}; "+
+			"case \"$h\" in ''|*[!0-9]*) exit 0;; esac; "+
+			"[ \"$z\" = 1 ] && exit 0; "+
+			"target=%d; max_for_game=$((h - %d)); "+
+			"[ \"$max_for_game\" -lt 1 ] && max_for_game=1; "+
+			"[ \"$max_for_game\" -lt \"$target\" ] && target=\"$max_for_game\"; "+
+			"%s -f /dev/null -L %s resize-pane -t %s -y \"$target\"",
+		gamePaneMaxHeight,
+		commandPaneMinHeight,
+		shellQuote(tmuxPath),
+		shellQuote(info.SocketName),
+		shellQuote(info.SessionName+":0.1"),
+	)
+	return "run-shell -b " + shellQuote(shell)
 }
 
 type commandPaneScrollBinding struct {
@@ -225,9 +269,10 @@ func bossHideCommand(info Info) string {
 	}, " ; ")
 }
 
-func bossRestoreCommand(info Info) string {
+func bossRestoreCommand(tmuxPath string, info Info) string {
 	return strings.Join([]string{
 		fmt.Sprintf("if-shell -F '#{window_zoomed_flag}' 'resize-pane -Z -t %s:0.0' ''", info.SessionName),
+		gamePaneResizeCommand(tmuxPath, info),
 		fmt.Sprintf("set-option -q -t %s pane-border-status %s", info.SessionName, paneBorderStatus),
 		fmt.Sprintf("if-shell -F '#{==:#{%s},1}' 'select-pane -t %s:0.1' 'select-pane -t %s:0.0'", bossPrevGameOption, info.SessionName, info.SessionName),
 		fmt.Sprintf("set-option -q -t %s %s 0", info.SessionName, bossHiddenOption),

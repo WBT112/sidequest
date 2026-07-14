@@ -49,6 +49,7 @@ func TestStartCreatesIsolatedLayout(t *testing.T) {
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-option", "-t", "sidequest-abc123", "remain-on-exit-format", "Command finished - F12 Snake - F10 Shell"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "split-window", "-v", "-l", "16", "-t", "sidequest-abc123:0.0"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "select-pane", "-t", "sidequest-abc123:0.1", "-T", "SNAKE"},
+		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "set-hook", "-t", "sidequest-abc123", "window-resized"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F12", "select-pane", "-t", ":.+"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F10", "detach-client"},
 		{"tmux", "-f", "/dev/null", "-L", "sidequest-abc123", "bind-key", "-n", "F9", "if-shell", "-F", "#{==:#{@sidequest_boss_hidden},1}"},
@@ -99,6 +100,75 @@ func TestStartSeedsDetachedSessionWithCurrentTerminalSize(t *testing.T) {
 	}
 	if !hasPrefix(runner.calls[0], want) {
 		t.Fatalf("new-session call = %#v, want prefix %#v", runner.calls[0], want)
+	}
+}
+
+func TestStartUsesDeterministicGamePaneHeight(t *testing.T) {
+	tests := []struct {
+		name string
+		rows int
+		want string
+	}{
+		{name: "below-max", rows: 24, want: "18"},
+		{name: "max", rows: 36, want: "30"},
+		{name: "above-max", rows: 60, want: "30"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &recordingRunner{}
+			layout := Layout{
+				CommandRunner: runner,
+				TerminalSize: func() (int, int, error) {
+					return 120, test.rows, nil
+				},
+			}
+			runtimeSession := session.Session{ID: "height-" + test.name, SocketPath: "/tmp/sidequest-1000/height/command.sock"}
+
+			if _, err := layout.Start(
+				runtimeSession,
+				[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+				[]string{"/usr/bin/sidequest", "__sidequest-game", "/tmp/sidequest-1000/height/state.json"},
+			); err != nil {
+				t.Fatalf("Start returned error: %v", err)
+			}
+
+			joined := runner.joinedCalls()
+			want := "split-window -v -l " + test.want
+			if !strings.Contains(joined, want) {
+				t.Fatalf("split height missing %q:\n%s", want, joined)
+			}
+		})
+	}
+}
+
+func TestStartHooksWindowResizeToGamePaneTarget(t *testing.T) {
+	runner := &recordingRunner{}
+	layout := Layout{CommandRunner: runner}
+	runtimeSession := session.Session{ID: "resize", SocketPath: "/tmp/sidequest-1000/resize/command.sock"}
+
+	if _, err := layout.Start(
+		runtimeSession,
+		[]string{"/usr/bin/sidequest", "__sidequest-command-runner", runtimeSession.SocketPath},
+		[]string{"/usr/bin/sidequest", "__sidequest-game", "/tmp/sidequest-1000/resize/state.json"},
+	); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	joined := runner.joinedCalls()
+	for _, want := range []string{
+		"set-hook -t sidequest-resize window-resized",
+		"run-shell -b",
+		"h=#{window_height}",
+		"z=#{window_zoomed_flag}",
+		"target=30",
+		"max_for_game=$((h - 6))",
+		"resize-pane -t",
+		"sidequest-resize:0.1",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("resize hook missing %q:\n%s", want, joined)
+		}
 	}
 }
 
