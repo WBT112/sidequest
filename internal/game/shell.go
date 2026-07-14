@@ -18,6 +18,12 @@ const movementPulseInterval = 10 * time.Millisecond
 const focusPollInterval = 100 * time.Millisecond
 const defaultInitialRenderDelay = 80 * time.Millisecond
 
+const (
+	GraphicsModeAuto  = "auto"
+	GraphicsModeASCII = "ascii"
+	GraphicsModeRich  = "rich"
+)
+
 type StateReader func() (session.State, error)
 type FocusReader func() (bool, error)
 type CommandPreviewReader func() (string, error)
@@ -129,6 +135,7 @@ type viewState struct {
 	CommandPreview  string
 	PanePauseKnown  bool
 	PanePaused      bool
+	GraphicsMode    string
 }
 
 type PendingHighscore struct {
@@ -186,6 +193,7 @@ func (s Shell) Run(ctx context.Context) error {
 	gameEpoch := now
 	game := newSnakeGameForScreen(screen)
 	mode := gameMode(state.GameMode)
+	graphics := graphicsMode(state.GraphicsMode)
 	boardWidth, boardHeight := boardSize(screen)
 	view := viewState{
 		State:          state,
@@ -196,7 +204,8 @@ func (s Shell) Run(ctx context.Context) error {
 		RoundStarted:   gameEpoch,
 		GameEpoch:      gameEpoch,
 		GameTime:       gameEpoch,
-		GraphicsNotice: initialGraphicsNotice(),
+		GraphicsNotice: initialGraphicsNotice(graphics),
+		GraphicsMode:   graphics,
 		Quest:          NewQuestState(mode, gameEpoch, s.Random, boardWidth, boardHeight),
 	}
 	s.syncFocus(&view, now, true)
@@ -406,6 +415,8 @@ func (s Shell) Run(ctx context.Context) error {
 			view.State = state
 			view.SessionState = state.Status
 			view.NoColor = state.NoColor
+			view.GraphicsMode = graphicsMode(state.GraphicsMode)
+			view.GraphicsNotice = initialGraphicsNotice(view.GraphicsMode)
 			if session.IsTerminalStatus(state.Status) {
 				now := s.now()
 				if view.Completion != CompletionContinue {
@@ -868,7 +879,7 @@ func render(screen tcell.Screen, view viewState) {
 	scoreStyle := colorStyle(style, view.NoColor, tcell.ColorGreen, tcell.ColorDefault)
 
 	drawBox(screen, 0, 0, width, height, style)
-	drawPlayfield(screen, style, view.NoColor)
+	drawPlayfield(screen, style, view.NoColor, view.GraphicsMode)
 
 	commandLine := "Command state: " + displayState(view.SessionState)
 	if view.CommandPreview != "" {
@@ -891,7 +902,7 @@ func render(screen tcell.Screen, view viewState) {
 		lines = append(lines, renderLine{y: y, text: view.Message, style: secondaryStyle})
 	}
 
-	drawSnake(screen, view.Game, style, view.NoColor)
+	drawSnake(screen, view.Game, style, view.NoColor, view.GraphicsMode)
 	drawGoldenByte(screen, view.Quest, style, view.NoColor)
 	drawPickup(screen, view.Quest, style, view.NoColor)
 	drawGraphicsNotice(screen, view, style)
@@ -965,7 +976,7 @@ func arenaForScreen(screen tcell.Screen) Arena {
 	return ArenaForScreen(width, height)
 }
 
-func drawPlayfield(screen tcell.Screen, style tcell.Style, noColor bool) {
+func drawPlayfield(screen tcell.Screen, style tcell.Style, noColor bool, graphicsMode string) {
 	width, height := screen.Size()
 	arena := arenaForScreen(screen)
 	topWallY := arena.Y - 1
@@ -977,7 +988,7 @@ func drawPlayfield(screen tcell.Screen, style tcell.Style, noColor bool) {
 	}
 
 	boardStyle := colorStyle(style, noColor, tcell.ColorDefault, tcell.ColorDarkSlateGray)
-	asciiGraphics := asciiGraphicsEnabled()
+	asciiGraphics := asciiGraphicsEnabled(graphicsMode)
 	wallStyle := colorStyle(style.Bold(true), noColor, tcell.ColorTeal, tcell.ColorTeal)
 	topWall := tcell.RuneBlock
 	sideWall := tcell.RuneBlock
@@ -1002,7 +1013,7 @@ func drawPlayfield(screen tcell.Screen, style tcell.Style, noColor bool) {
 	}
 }
 
-func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style, noColor bool) {
+func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style, noColor bool, graphicsMode string) {
 	if game == nil {
 		return
 	}
@@ -1013,7 +1024,7 @@ func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style, noCo
 	bodyStyle := colorStyle(baseStyle.Bold(true), noColor, tcell.ColorLimeGreen, boardBackground)
 	tailStyle := colorStyle(baseStyle, noColor, tcell.ColorGreen, boardBackground)
 	headStyle := bodyStyle.Bold(true)
-	asciiGraphics := asciiGraphicsEnabled()
+	asciiGraphics := asciiGraphicsEnabled(graphicsMode)
 
 	if game.Food.X >= 0 && game.Food.X < arena.Width && game.Food.Y >= 0 && game.Food.Y < arena.Height {
 		drawCell(screen, arena, game.Food, "()", foodStyle)
@@ -1044,7 +1055,34 @@ func drawSnake(screen tcell.Screen, game *SnakeGame, baseStyle tcell.Style, noCo
 	}
 }
 
-func asciiGraphicsEnabled() bool {
+func ParseGraphicsMode(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", GraphicsModeAuto:
+		return GraphicsModeAuto, nil
+	case GraphicsModeASCII, "plain":
+		return GraphicsModeASCII, nil
+	case GraphicsModeRich, "unicode":
+		return GraphicsModeRich, nil
+	default:
+		return "", fmt.Errorf("unknown graphics mode %q", value)
+	}
+}
+
+func graphicsMode(value string) string {
+	mode, err := ParseGraphicsMode(value)
+	if err != nil {
+		return GraphicsModeAuto
+	}
+	return mode
+}
+
+func asciiGraphicsEnabled(mode string) bool {
+	switch graphicsMode(mode) {
+	case GraphicsModeASCII:
+		return true
+	case GraphicsModeRich:
+		return false
+	}
 	value := strings.ToLower(strings.TrimSpace(os.Getenv("SIDEQUEST_GRAPHICS")))
 	if value == "ascii" || value == "plain" {
 		return true
@@ -1108,7 +1146,7 @@ func drawGraphicsNotice(screen tcell.Screen, view viewState, baseStyle tcell.Sty
 	}
 	lines := []string{
 		view.GraphicsNotice,
-		"Set SIDEQUEST_GRAPHICS=rich for block graphics",
+		"Use --graphics rich for block graphics",
 		"Press Arrow Keys/WASD to play",
 	}
 	style := colorStyle(baseStyle.Bold(true), view.NoColor, tcell.ColorYellow, tcell.ColorDarkSlateGray)
@@ -1571,8 +1609,8 @@ func heatTransitionText(heat HeatLevel) string {
 	return fmt.Sprintf("COMMAND HEAT RISING... SPEED %d  SCORE %s", heat.Level, heat.MultiplierText())
 }
 
-func initialGraphicsNotice() string {
-	if !asciiGraphicsEnabled() {
+func initialGraphicsNotice(graphicsMode string) string {
+	if !asciiGraphicsEnabled(graphicsMode) {
 		return ""
 	}
 	return "ASCII graphics mode"

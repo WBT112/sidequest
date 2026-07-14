@@ -1225,6 +1225,57 @@ func TestRunDrawsAsciiCompatiblePlayfieldWhenRequested(t *testing.T) {
 	cancelShell(t, cancel, errc)
 }
 
+func TestRunDrawsAsciiCompatiblePlayfieldFromState(t *testing.T) {
+	t.Setenv("SIDEQUEST_GRAPHICS", "")
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.SetSize(40, 12)
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning, GraphicsMode: GraphicsModeASCII}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: time.Hour,
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "ASCII graphics mode")
+	topWall, _, _, _ := screen.GetContent(20, 4)
+	if topWall != '=' {
+		t.Fatalf("top wall = %q, want ASCII wall", topWall)
+	}
+
+	cancelShell(t, cancel, errc)
+}
+
+func TestRunStateRichGraphicsOverridesAsciiEnvironment(t *testing.T) {
+	t.Setenv("SIDEQUEST_GRAPHICS", "ascii")
+	screen := tcell.NewSimulationScreen("UTF-8")
+	screen.SetSize(40, 12)
+
+	shell := Shell{
+		NewScreen: func() (tcell.Screen, error) { return screen, nil },
+		ReadState: func() (session.State, error) {
+			return session.State{Status: session.StatusRunning, GraphicsMode: GraphicsModeRich}, nil
+		},
+		PollInterval: time.Hour,
+		GameInterval: time.Hour,
+	}
+
+	cancel, errc := runShellCancellable(shell)
+
+	waitForRenderedText(t, screen, "Arrows/WASD start")
+	waitForMissingRenderedText(t, screen, "ASCII graphics mode")
+	topWall, _, _, _ := screen.GetContent(20, 4)
+	if topWall != tcell.RuneBlock {
+		t.Fatalf("top wall = %q, want rich block wall", topWall)
+	}
+
+	cancelShell(t, cancel, errc)
+}
+
 func TestRunDrawsMonochromeClassicWithoutColors(t *testing.T) {
 	screen := tcell.NewSimulationScreen("UTF-8")
 	screen.SetSize(40, 12)
