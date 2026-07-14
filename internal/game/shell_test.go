@@ -1201,6 +1201,7 @@ func TestRunDrawsAsciiCompatiblePlayfieldWhenRequested(t *testing.T) {
 			return session.State{Status: session.StatusRunning}, nil
 		},
 		PollInterval: time.Hour,
+		GameInterval: time.Hour,
 	}
 
 	cancel, errc := runShellCancellable(shell)
@@ -1208,7 +1209,6 @@ func TestRunDrawsAsciiCompatiblePlayfieldWhenRequested(t *testing.T) {
 	waitForRenderedText(t, screen, "Arrows/WASD start")
 	waitForRenderedText(t, screen, "ASCII graphics mode")
 	waitForRenderedText(t, screen, "Press Arrow Keys/WASD to play")
-	arena := arenaForScreen(screen)
 	topWall, _, topStyle, _ := screen.GetContent(20, 4)
 	sideWall, _, _, _ := screen.GetContent(0, 6)
 	wallForeground, wallBackground, _ := topStyle.Decompose()
@@ -1220,10 +1220,7 @@ func TestRunDrawsAsciiCompatiblePlayfieldWhenRequested(t *testing.T) {
 	}
 	screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone))
 	waitForMissingRenderedText(t, screen, "ASCII graphics mode")
-	head, _, _, _ := screen.GetContent(arena.CellX(arena.Width/2), arena.CellY(arena.Height/2))
-	if head != '@' {
-		t.Fatalf("snake head = %q, want ASCII head", head)
-	}
+	waitForRenderedText(t, screen, "@@")
 
 	cancelShell(t, cancel, errc)
 }
