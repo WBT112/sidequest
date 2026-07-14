@@ -35,6 +35,8 @@ Options:
   -h, --help       Show this help text.
   -v, --version    Show the sidequest version.
   --mode <mode>    Select game mode: classic or quest.
+  --graphics <mode>
+                   Select graphics: auto, ascii, or rich.
   --no-history     Do not persist command-pane output after the run.
   --no-color       Disable Sidequest game/UI colors.
   --aug            Show augmented live command context in the game pane.
@@ -53,6 +55,7 @@ type Config struct {
 	Executable string
 	Arguments  []string
 	Mode       string
+	Graphics   string
 	NoHistory  bool
 	NoColor    bool
 	Augmented  bool
@@ -210,6 +213,7 @@ func (a App) Run(args []string) int {
 		if runtimeSession.StatePath != "" {
 			if err := a.updateState(runtimeSession, a.now(), func(state *session.State) {
 				state.GameMode = result.Config.Mode
+				state.GraphicsMode = result.Config.Graphics
 				state.NoHistory = result.Config.NoHistory
 				state.NoColor = result.Config.NoColor
 				state.Augmented = result.Config.Augmented
@@ -238,6 +242,7 @@ func Parse(args []string) (Result, error) {
 	}
 
 	mode := game.GameModeClassic
+	graphics := game.GraphicsModeAuto
 	noHistory := false
 	noColor := os.Getenv("NO_COLOR") != ""
 	augmented := false
@@ -258,6 +263,16 @@ func Parse(args []string) (Result, error) {
 			}
 			mode = selectedMode
 			index++
+		case "--graphics":
+			if index+1 >= len(args) {
+				return Result{}, fmt.Errorf("--graphics requires auto, ascii, or rich")
+			}
+			selectedGraphics, err := game.ParseGraphicsMode(args[index+1])
+			if err != nil {
+				return Result{}, err
+			}
+			graphics = selectedGraphics
+			index++
 		case "--no-history":
 			noHistory = true
 		case "--no-color":
@@ -265,7 +280,7 @@ func Parse(args []string) (Result, error) {
 		case "--aug":
 			augmented = true
 		case "--":
-			return parseCommand(args[index+1:], mode, noHistory, noColor, augmented)
+			return parseCommand(args[index+1:], mode, graphics, noHistory, noColor, augmented)
 		default:
 			if strings.HasPrefix(arg, "--mode=") {
 				selectedMode, err := parseMode(strings.TrimPrefix(arg, "--mode="))
@@ -273,6 +288,14 @@ func Parse(args []string) (Result, error) {
 					return Result{}, err
 				}
 				mode = selectedMode
+				continue
+			}
+			if strings.HasPrefix(arg, "--graphics=") {
+				selectedGraphics, err := game.ParseGraphicsMode(strings.TrimPrefix(arg, "--graphics="))
+				if err != nil {
+					return Result{}, err
+				}
+				graphics = selectedGraphics
 				continue
 			}
 			if strings.HasPrefix(arg, "-") {
@@ -309,7 +332,7 @@ func Usage() string {
 	return usage
 }
 
-func parseCommand(args []string, mode string, noHistory bool, noColor bool, augmented bool) (Result, error) {
+func parseCommand(args []string, mode string, graphics string, noHistory bool, noColor bool, augmented bool) (Result, error) {
 	if len(args) == 0 || args[0] == "" {
 		return Result{}, ErrMissingCommand
 	}
@@ -319,6 +342,7 @@ func parseCommand(args []string, mode string, noHistory bool, noColor bool, augm
 			Executable: args[0],
 			Arguments:  append([]string(nil), args[1:]...),
 			Mode:       mode,
+			Graphics:   graphics,
 			NoHistory:  noHistory,
 			NoColor:    noColor,
 			Augmented:  augmented,

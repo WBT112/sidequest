@@ -45,6 +45,7 @@ sidequest -- ssh deploy@example.com
 sidequest -- sh -c 'sudo du -xh /var /usr /home 2>/dev/null | sort -h'
 sidequest --no-history -- ssh production.example.com
 sidequest --no-color -- make test
+sidequest --graphics ascii -- ssh legacy-host.example.com
 sidequest --aug -- make test
 sidequest --mode quest -- make test
 sidequest -- codex
@@ -102,14 +103,14 @@ Some terminals render block characters differently. Sidequest keeps rich block
 graphics by default, but can use a safer ASCII fallback:
 
 ```bash
-SIDEQUEST_GRAPHICS=ascii sidequest -- <command>
+sidequest --graphics ascii -- <command>
 ```
 
 If Sidequest detects a fallback but your terminal renders rich graphics
 correctly, force the default style:
 
 ```bash
-SIDEQUEST_GRAPHICS=rich sidequest -- <command>
+sidequest --graphics rich -- <command>
 ```
 
 ## Sessions and History

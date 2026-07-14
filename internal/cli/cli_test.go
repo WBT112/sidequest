@@ -99,10 +99,37 @@ func TestParseAugmentedBeforeSeparator(t *testing.T) {
 	}
 }
 
+func TestParseGraphicsBeforeSeparator(t *testing.T) {
+	result, err := Parse([]string{"--graphics", "ascii", "--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if result.Config.Graphics != game.GraphicsModeASCII {
+		t.Fatalf("Graphics = %q, want ascii", result.Config.Graphics)
+	}
+}
+
+func TestParseGraphicsEqualsBeforeSeparator(t *testing.T) {
+	result, err := Parse([]string{"--graphics=rich", "--", "sleep", "1"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if result.Config.Graphics != game.GraphicsModeRich {
+		t.Fatalf("Graphics = %q, want rich", result.Config.Graphics)
+	}
+}
+
 func TestParseRejectsUnknownMode(t *testing.T) {
 	_, err := Parse([]string{"--mode", "arena", "--", "true"})
 	if err == nil || !strings.Contains(err.Error(), "unknown mode") {
 		t.Fatalf("Parse error = %v, want unknown mode", err)
+	}
+}
+
+func TestParseRejectsUnknownGraphicsMode(t *testing.T) {
+	_, err := Parse([]string{"--graphics", "neon", "--", "true"})
+	if err == nil || !strings.Contains(err.Error(), "unknown graphics mode") {
+		t.Fatalf("Parse error = %v, want unknown graphics mode", err)
 	}
 }
 
@@ -188,7 +215,7 @@ func TestRunHelpDocumentsSeparator(t *testing.T) {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
 
-	for _, want := range []string{"sidequest [options] -- <command> [arguments...]", "--no-history", "--no-color", "--aug"} {
+	for _, want := range []string{"sidequest [options] -- <command> [arguments...]", "--graphics", "--no-history", "--no-color", "--aug"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help output missing %q:\n%s", want, out.String())
 		}
@@ -280,6 +307,37 @@ func TestRunCommandStoresAugmentedChoice(t *testing.T) {
 	}
 
 	code := app.Run([]string{"--aug", "--", "true"})
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, want 0", code)
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+}
+
+func TestRunCommandStoresGraphicsChoice(t *testing.T) {
+	var out bytes.Buffer
+	base := filepath.Join(t.TempDir(), "sidequest")
+	manager := session.Manager{BaseDir: base, IDGenerator: fixedID("graphics")}
+	app := App{
+		Out:       &out,
+		Preflight: func() error { return nil },
+		CreateSession: func() (session.Session, error) {
+			return manager.Create()
+		},
+		RunLayout: func(gotSession session.Session, gotCommand session.Command) error {
+			state, err := session.ReadState(gotSession)
+			if err != nil {
+				t.Fatalf("ReadState returned error: %v", err)
+			}
+			if state.GraphicsMode != game.GraphicsModeASCII {
+				t.Fatalf("GraphicsMode = %q, want ascii", state.GraphicsMode)
+			}
+			return nil
+		},
+	}
+
+	code := app.Run([]string{"--graphics", "ascii", "--", "true"})
 	if code != 0 {
 		t.Fatalf("Run exit code = %d, want 0", code)
 	}
