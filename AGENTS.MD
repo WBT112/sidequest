@@ -249,7 +249,7 @@ Required behavior:
 The MVP requires:
 
 ```text
-Minimum terminal size: 80 columns × 24 rows
+Minimum terminal size: 80 columns × 22 rows
 Minimum usable game area: 40 columns × 10 rows
 ```
 
